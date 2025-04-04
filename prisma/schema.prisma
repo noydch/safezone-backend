@@ -56,16 +56,14 @@ model Supplier {
   address        String
   phone          String
   email          String
+  purchaseOrders PurchaseOrder[]
   createdAt      DateTime        @default(now())
   updatedAt      DateTime        @updatedAt
-  purchaseOrders PurchaseOrder[]
-  importReceipts ImportReceipt[]
 }
 
 model Drink {
   id              Int                   @id @default(autoincrement())
   name            String
-  category        String
   qty             Int?
   price           Decimal
   imageUrl        String
@@ -81,7 +79,7 @@ model Drink {
 
 model PurchaseOrder {
   id         Int                   @id @default(autoincrement())
-  supplier   Supplier              @relation(fields: [supplierId], references: [id])
+  supplier   Supplier @relation(fields: [supplierId], references: [id])
   supplierId Int
   orderDate  DateTime              @default(now())
   totalPrice Float
@@ -104,7 +102,6 @@ model PurchaseOrderDetail {
 
 model ImportReceipt {
   id         Int            @id @default(autoincrement())
-  supplier   Supplier       @relation(fields: [supplierId], references: [id])
   supplierId Int
   importDate DateTime       @default(now())
   totalPrice Float
