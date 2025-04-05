@@ -13,6 +13,13 @@ enum Gender {
   Other
 }
 
+enum Role {
+  Admin
+  Salesman
+  Chef
+  Waiter
+}
+
 model Employee {
   id        Int      @id @default(autoincrement())
   fname     String
@@ -20,7 +27,7 @@ model Employee {
   gender    Gender
   phone     String
   dob       DateTime
-  role      String   @default("waiter")
+  role      Role
   email     String   @unique
   password  String
   createdAt DateTime @default(now())
@@ -79,7 +86,7 @@ model Drink {
 
 model PurchaseOrder {
   id         Int                   @id @default(autoincrement())
-  supplier   Supplier @relation(fields: [supplierId], references: [id])
+  supplier   Supplier              @relation(fields: [supplierId], references: [id])
   supplierId Int
   orderDate  DateTime              @default(now())
   totalPrice Float

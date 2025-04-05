@@ -57,7 +57,7 @@ exports.login = async (req, res) => {
 
 exports.register = async (req, res) => {
     try {
-        const { fname, lname, phone, dob, email, password } = req.body;
+        const { fname, lname, phone, dob, role, email, password } = req.body;
         // console.log(email, "\n", password);
 
         if (!email) {
@@ -96,7 +96,8 @@ exports.register = async (req, res) => {
                 lname,
                 gender: 'Male',
                 phone,
-                dob: DateTime.fromISO(dob, { zone: "utc" }).startOf("day").toJSDate(), //ແປງເປັນ YYYY-MM-DD
+                dob: DateTime.fromISO(dob, { zone: "utc" }).startOf("day").toJSDate(), //ແປງເປັນ YYYY-MM-DD,
+                role,
                 email,
                 password: hashPassword
             }
