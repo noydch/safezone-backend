@@ -3,6 +3,7 @@ const prisma = require("../config/prisma");
 exports.insertCart = async (req, res) => {
     try {
         const { cart } = req.body; // cart = [{ itemId, itemType, qty, price }, ...]
+        console.log(cart);
         if (!cart) {
             return res.status(400).json({ message: "Cart is empty" });
         }
@@ -34,20 +35,20 @@ exports.insertCart = async (req, res) => {
 
 exports.getCart = async (req, res) => {
     try {
-        const { cartId } = req.query; // Use query parameter for cartId
+        const { cartId } = req.params; // ดึง cartId จาก params
 
         if (!cartId) {
             return res.status(400).json({ message: "Cart ID is required" });
         }
 
-        // Retrieve the cart with its details
+        // ค้นหาตะกร้าตาม cartId
         const cart = await prisma.cart.findUnique({
             where: { id: Number(cartId) },
             include: {
                 cartDetails: {
                     include: {
-                        Food: true,  // Include food details if the item is a food item
-                        Drink: true  // Include drink details if the item is a drink item
+                        Food: true,  // รวมข้อมูลอาหาร
+                        Drink: true  // รวมข้อมูลเครื่องดื่ม
                     }
                 }
             }
@@ -57,22 +58,38 @@ exports.getCart = async (req, res) => {
             return res.status(404).json({ message: "Cart not found" });
         }
 
-        // Respond with the cart details
-        const detailedCart = cart.cartDetails.map(item => ({
-            id: item.id,
-            name: item.itemType === "food" ? item.Food?.name : item.Drink?.name,
-            imageUrl: item.itemType === "food" ? item.Food?.imageUrl : item.Drink?.imageUrl,
-            qty: item.qty,
-            price: item.price,
-            type: item.itemType
-        }));
+        // สร้างโครงสร้างข้อมูลตะกร้าพร้อมรายละเอียด
+        const detailedCart = cart.cartDetails.map(item => {
+            let itemDetails = null;
+            if (item.itemType === "food" && item.Food) {
+                itemDetails = {
+                    id: item.Food.id,
+                    name: item.Food.name,
+                    imageUrl: item.Food.imageUrl,
+                    qty: item.qty,
+                    price: item.price
+                };
+            } else if (item.itemType === "drink" && item.Drink) {
+                itemDetails = {
+                    id: item.Drink.id,
+                    name: item.Drink.name,
+                    imageUrl: item.Drink.imageUrl,
+                    qty: item.qty,
+                    price: item.price
+                };
+            }
 
+            return itemDetails;
+        }).filter(item => item !== null); // กรองเอาเฉพาะรายการที่ไม่เป็น null
+
+        console.log(cart);
         res.status(200).json({ cart: detailedCart });
     } catch (error) {
         console.error("Error fetching cart:", error);
         res.status(500).json({ message: "Error fetching cart" });
     }
 };
+
 
 exports.delCartItem = async (req, res) => {
     const { cartItemId } = req.body;

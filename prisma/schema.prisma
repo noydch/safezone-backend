@@ -65,7 +65,7 @@ model Supplier {
 model Drink {
   id              Int                   @id @default(autoincrement())
   name            String
-  category        String
+  // category        String
   qty             Int?
   price           Decimal
   imageUrl        String
@@ -179,7 +179,7 @@ model CartDetail {
   id       Int    @id @default(autoincrement())
   cart     Cart   @relation(fields: [cartId], references: [id], onDelete: Cascade)
   cartId   Int
-  itemId   Int // ID ของทั้ง Food และ Drink
+  itemId   Int
   itemType String // "food" หรือ "drink"
   qty      Int    @default(1)
   price    Float

@@ -7,7 +7,7 @@ const router = express.Router()
 router.use(cors())
 
 router.post('/addCart', authCheck, insertCart)
-router.get('/getCart', authCheck, getCart)
+router.get('/getCart/:cartId', authCheck, getCart);
 router.put('/updateCart', updateCart)
 router.delete("/delCartItem/:cartItemId", delCartItem);
 module.exports = router
