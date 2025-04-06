@@ -6,7 +6,7 @@ CREATE TABLE `Employee` (
     `gender` ENUM('Male', 'Female', 'Other') NOT NULL,
     `phone` VARCHAR(191) NOT NULL,
     `dob` DATETIME(3) NOT NULL,
-    `role` VARCHAR(191) NOT NULL DEFAULT 'waiter',
+    `role` ENUM('Admin', 'Salesman', 'Chef', 'Waiter') NOT NULL,
     `email` VARCHAR(191) NOT NULL,
     `password` VARCHAR(191) NOT NULL,
     `createdAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
@@ -57,7 +57,6 @@ CREATE TABLE `Supplier` (
 CREATE TABLE `Drink` (
     `id` INTEGER NOT NULL AUTO_INCREMENT,
     `name` VARCHAR(191) NOT NULL,
-    `category` VARCHAR(191) NOT NULL,
     `qty` INTEGER NULL,
     `price` DECIMAL(65, 30) NOT NULL,
     `imageUrl` VARCHAR(191) NOT NULL,
@@ -146,7 +145,7 @@ CREATE TABLE `OrderDetail` (
 CREATE TABLE `Table` (
     `id` INTEGER NOT NULL AUTO_INCREMENT,
     `table_number` INTEGER NOT NULL,
-    `status` VARCHAR(191) NOT NULL,
+    `status` VARCHAR(191) NOT NULL DEFAULT 'ວ່າງ',
     `seat` INTEGER NOT NULL,
     `createdAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
     `updatedAt` DATETIME(3) NOT NULL,
@@ -164,29 +163,6 @@ CREATE TABLE `Customer` (
     `updatedAt` DATETIME(3) NOT NULL,
 
     UNIQUE INDEX `Customer_phone_key`(`phone`),
-    PRIMARY KEY (`id`)
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-
--- CreateTable
-CREATE TABLE `Cart` (
-    `id` INTEGER NOT NULL AUTO_INCREMENT,
-    `createdAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-    `updatedAt` DATETIME(3) NOT NULL,
-
-    PRIMARY KEY (`id`)
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-
--- CreateTable
-CREATE TABLE `CartDetail` (
-    `id` INTEGER NOT NULL AUTO_INCREMENT,
-    `cartId` INTEGER NOT NULL,
-    `itemId` INTEGER NOT NULL,
-    `itemType` VARCHAR(191) NOT NULL,
-    `qty` INTEGER NOT NULL,
-    `price` DOUBLE NOT NULL,
-    `foodId` INTEGER NULL,
-    `drinkId` INTEGER NULL,
-
     PRIMARY KEY (`id`)
 ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
@@ -219,9 +195,6 @@ ALTER TABLE `PurchaseOrderDetail` ADD CONSTRAINT `PurchaseOrderDetail_poId_fkey`
 ALTER TABLE `PurchaseOrderDetail` ADD CONSTRAINT `PurchaseOrderDetail_drinkId_fkey` FOREIGN KEY (`drinkId`) REFERENCES `Drink`(`id`) ON DELETE RESTRICT ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE `ImportReceipt` ADD CONSTRAINT `ImportReceipt_supplierId_fkey` FOREIGN KEY (`supplierId`) REFERENCES `Supplier`(`id`) ON DELETE RESTRICT ON UPDATE CASCADE;
-
--- AddForeignKey
 ALTER TABLE `ImportDetail` ADD CONSTRAINT `ImportDetail_importId_fkey` FOREIGN KEY (`importId`) REFERENCES `ImportReceipt`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
@@ -238,15 +211,6 @@ ALTER TABLE `OrderDetail` ADD CONSTRAINT `OrderDetail_foodId_fkey` FOREIGN KEY (
 
 -- AddForeignKey
 ALTER TABLE `OrderDetail` ADD CONSTRAINT `OrderDetail_drinkId_fkey` FOREIGN KEY (`drinkId`) REFERENCES `Drink`(`id`) ON DELETE SET NULL ON UPDATE CASCADE;
-
--- AddForeignKey
-ALTER TABLE `CartDetail` ADD CONSTRAINT `CartDetail_cartId_fkey` FOREIGN KEY (`cartId`) REFERENCES `Cart`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
-
--- AddForeignKey
-ALTER TABLE `CartDetail` ADD CONSTRAINT `CartDetail_foodId_fkey` FOREIGN KEY (`foodId`) REFERENCES `Food`(`id`) ON DELETE SET NULL ON UPDATE CASCADE;
-
--- AddForeignKey
-ALTER TABLE `CartDetail` ADD CONSTRAINT `CartDetail_drinkId_fkey` FOREIGN KEY (`drinkId`) REFERENCES `Drink`(`id`) ON DELETE SET NULL ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE `Reservation` ADD CONSTRAINT `Reservation_customerId_fkey` FOREIGN KEY (`customerId`) REFERENCES `Customer`(`id`) ON DELETE RESTRICT ON UPDATE CASCADE;

@@ -54,7 +54,7 @@ model Food {
   createdAt    DateTime      @default(now())
   updatedAt    DateTime      @updatedAt
   orderDetails OrderDetail[]
-  cartDetails  CartDetail[]
+  // cartDetails  CartDetail[]
 }
 
 model Supplier {
@@ -81,7 +81,7 @@ model Drink {
   Category        Category?             @relation(fields: [categoryId], references: [id])
   categoryId      Int?
   OrderDetail     OrderDetail[]
-  CartDetail      CartDetail[]
+  // CartDetail      CartDetail[]
 }
 
 model PurchaseOrder {
@@ -170,27 +170,6 @@ model Customer {
   createdAt   DateTime      @default(now())
   updatedAt   DateTime      @updatedAt
   Reservation Reservation[]
-}
-
-model Cart {
-  id          Int          @id @default(autoincrement())
-  createdAt   DateTime     @default(now())
-  updatedAt   DateTime     @updatedAt
-  cartDetails CartDetail[]
-}
-
-model CartDetail {
-  id       Int    @id @default(autoincrement())
-  cart     Cart   @relation(fields: [cartId], references: [id], onDelete: Cascade)
-  cartId   Int
-  itemId   Int // ID ของทั้ง Food และ Drink
-  itemType String // "food" หรือ "drink"
-  qty      Int    @default(1)
-  price    Float
-  Food     Food?  @relation(fields: [foodId], references: [id])
-  foodId   Int?
-  Drink    Drink? @relation(fields: [drinkId], references: [id])
-  drinkId  Int?
 }
 
 model Reservation {
