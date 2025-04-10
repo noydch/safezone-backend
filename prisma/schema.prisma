@@ -7,6 +7,7 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+// --- Enums ---
 enum Gender {
   Male
   Female
@@ -20,6 +21,21 @@ enum Role {
   Waiter
 }
 
+enum PaymentMethod {
+  CASH // สำหรับเงินสด
+  TRANSFER // สำหรับเงินโอน
+}
+
+enum OrderStatus {
+  PENDING // รอเข้าระบบ/รอครัว
+  COOKING // กำลังทำ
+  READY // พร้อมเสิร์ฟ
+  SERVED // เสิร์ฟแล้ว
+  PAID // จ่ายแล้ว
+  CANCELLED // ยกเลิก
+}
+
+// --- Models ---
 model Employee {
   id        Int      @id @default(autoincrement())
   fname     String
@@ -54,7 +70,6 @@ model Food {
   createdAt    DateTime      @default(now())
   updatedAt    DateTime      @updatedAt
   orderDetails OrderDetail[]
-  // cartDetails  CartDetail[]
 }
 
 model Supplier {
@@ -66,6 +81,7 @@ model Supplier {
   purchaseOrders PurchaseOrder[]
   createdAt      DateTime        @default(now())
   updatedAt      DateTime        @updatedAt
+  ImportReceipt  ImportReceipt[]
 }
 
 model Drink {
@@ -81,19 +97,19 @@ model Drink {
   Category        Category?             @relation(fields: [categoryId], references: [id])
   categoryId      Int?
   OrderDetail     OrderDetail[]
-  // CartDetail      CartDetail[]
 }
 
 model PurchaseOrder {
-  id         Int                   @id @default(autoincrement())
-  supplier   Supplier              @relation(fields: [supplierId], references: [id])
-  supplierId Int
-  orderDate  DateTime              @default(now())
-  totalPrice Float
-  status     String                @default("pending") // pending, approved, cancelled
-  createdAt  DateTime              @default(now())
-  updatedAt  DateTime              @updatedAt
-  details    PurchaseOrderDetail[]
+  id            Int                   @id @default(autoincrement())
+  supplier      Supplier              @relation(fields: [supplierId], references: [id])
+  supplierId    Int
+  orderDate     DateTime              @default(now())
+  totalPrice    Float
+  status        String                @default("pending") // pending, approved, cancelled
+  createdAt     DateTime              @default(now())
+  updatedAt     DateTime              @updatedAt
+  details       PurchaseOrderDetail[]
+  ImportReceipt ImportReceipt[]
 }
 
 model PurchaseOrderDetail {
@@ -108,14 +124,17 @@ model PurchaseOrderDetail {
 }
 
 model ImportReceipt {
-  id         Int            @id @default(autoincrement())
-  supplierId Int
-  importDate DateTime       @default(now())
-  totalPrice Float
-  status     String         @default("pending") // pending, completed, cancelled
-  createdAt  DateTime       @default(now())
-  updatedAt  DateTime       @updatedAt
-  details    ImportDetail[]
+  id              Int            @id @default(autoincrement())
+  supplier        Supplier       @relation(fields: [supplierId], references: [id])
+  supplierId      Int
+  importDate      DateTime       @default(now())
+  totalPrice      Float
+  status          String         @default("pending") // pending, completed, cancelled
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+  details         ImportDetail[]
+  purchaseOrderId Int?
+  purchaseOrder   PurchaseOrder? @relation(fields: [purchaseOrderId], references: [id])
 }
 
 model ImportDetail {
@@ -130,18 +149,21 @@ model ImportDetail {
 }
 
 model Order {
-  id           Int           @id @default(autoincrement())
-  employee     Employee      @relation(fields: [empId], references: [id])
-  empId        Int
-  orderDate    DateTime      @default(now())
-  total_price  Float
-  createdAt    DateTime      @default(now())
-  orderDetails OrderDetail[]
+  id            Int           @id @default(autoincrement())
+  employee      Employee      @relation(fields: [empId], references: [id])
+  empId         Int
+  orderDate     DateTime      @default(now())
+  total_price   Float
+  paymentMethod PaymentMethod
+  status        OrderStatus   @default(PENDING) // เพิ่มสถานะออเดอร์
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime?     @updatedAt // เปลี่ยนเป็น DateTime? (Optional)
+  orderDetails  OrderDetail[]
 }
 
 model OrderDetail {
   id        Int      @id @default(autoincrement())
-  order     Order    @relation(fields: [ord_id], references: [id])
+  order     Order    @relation(fields: [ord_id], references: [id], onDelete: Cascade) // เพิ่ม onDelete: Cascade
   ord_id    Int
   food      Food?    @relation(fields: [foodId], references: [id])
   foodId    Int?
@@ -155,7 +177,7 @@ model OrderDetail {
 model Table {
   id           Int           @id @default(autoincrement())
   table_number Int
-  status       String        @default("ວ່າງ")
+  status       String        @default("ວ່າງ") // อาจจะเปลี่ยนเป็น Enum TableStatus ได้ในอนาคต
   seat         Int
   createdAt    DateTime      @default(now())
   updatedAt    DateTime      @updatedAt
@@ -166,7 +188,7 @@ model Customer {
   id          Int           @id @default(autoincrement())
   fname       String
   lname       String
-  phone       String        @unique // Add @unique here
+  phone       String        @unique
   createdAt   DateTime      @default(now())
   updatedAt   DateTime      @updatedAt
   Reservation Reservation[]
@@ -179,7 +201,7 @@ model Reservation {
   table           Table    @relation(fields: [tableId], references: [id])
   tableId         Int
   reservationTime DateTime
-  status          String   @default("pending") // เช่น pending, confirmed, cancelled
+  status          String   @default("pending") // เช่น pending, confirmed, cancelled - อาจจะเปลี่ยนเป็น Enum ReservationStatus ได้
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 }

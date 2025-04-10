@@ -1,6 +1,6 @@
 const express = require('express');
 const cors = require('cors');
-const { createOrder, getAllOrders, getOrderById, deleteOrder } = require('../controller/order');
+const { createOrder, getAllOrders, getOrderById, deleteOrder, updateOrderStatus } = require('../controller/order');
 
 const router = express.Router();
 router.use(cors());
@@ -10,5 +10,6 @@ router.post('/createOrder', createOrder);
 router.get('/getOrders', getAllOrders);
 router.get('/getOrder/:id', getOrderById);
 router.delete('/deleteOrder/:id', deleteOrder);
+router.put('/updateOrder/:id', updateOrderStatus);
 
 module.exports = router; 

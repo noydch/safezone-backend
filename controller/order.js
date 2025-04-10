@@ -1,51 +1,73 @@
 const prisma = require('../config/prisma');
+// ควร import OrderStatus enum เพื่อใช้ในการ validation
+const { OrderStatus } = require('@prisma/client');
 
-// 📌 CREATE ORDER
+// CREATE ORDER (ไม่เปลี่ยนแปลงจากเดิมมากนัก, status จะถูก set เป็น PENDING โดย default)
 exports.createOrder = async (req, res) => {
     try {
-        const { empId, orderDetails } = req.body; // orderDetails is an array: [{ itemId, itemType, quantity, price }, ...]
+        const { empId, orderDetails, paymentMethod } = req.body;
 
-        if (!empId || !orderDetails || !Array.isArray(orderDetails) || orderDetails.length === 0) {
-            return res.status(400).json({ message: "Employee ID and order details are required." });
+        if (!empId || !orderDetails || !Array.isArray(orderDetails) || orderDetails.length === 0 || !paymentMethod) {
+            return res.status(400).json({ message: "Employee ID, order details, and payment method are required." });
         }
 
-        // Calculate total price
-        const total_price = orderDetails.reduce((sum, item) => sum + item.price * item.quantity, 0);
+        if (paymentMethod !== 'CASH' && paymentMethod !== 'TRANSFER') {
+            return res.status(400).json({ message: "Invalid payment method. Must be 'CASH' or 'TRANSFER'." });
+        }
 
-        // Create the order and its details in a transaction
+        const total_price = orderDetails.reduce((sum, item) => {
+            const price = parseFloat(item.price);
+            const quantity = parseInt(item.quantity, 10);
+            if (isNaN(price) || isNaN(quantity)) {
+                throw new Error(`Invalid price or quantity for item: ${JSON.stringify(item)}`);
+            }
+            return sum + price * quantity;
+        }, 0);
+
         const newOrder = await prisma.$transaction(async (tx) => {
             const order = await tx.order.create({
                 data: {
                     empId: parseInt(empId),
                     total_price: total_price,
+                    paymentMethod: paymentMethod,
+                    // status: 'PENDING' // ไม่จำเป็นต้องใส่ เพราะมี @default(PENDING) ใน schema แล้ว
                 },
-                include: {
-                    employee: true // Include employee details in the response
-                }
             });
 
             const detailCreations = orderDetails.map(detail => {
                 const detailData = {
-                    ord_id: order.id,
-                    quantity: detail.quantity,
-                    price: detail.price,
+                    ord_id: Number(order.id),
+                    quantity: parseInt(detail.quantity, 10),
+                    price: parseFloat(detail.price),
                 };
+
+                if (!detail.itemId || !detail.itemType) {
+                    throw new Error(`Missing itemId or itemType for detail: ${JSON.stringify(detail)}`);
+                }
+                const itemId = parseInt(detail.itemId, 10);
+                if (isNaN(itemId)) {
+                    throw new Error(`Invalid itemId: ${detail.itemId}`);
+                }
+
                 if (detail.itemType === 'food') {
-                    detailData.foodId = detail.itemId;
+                    detailData.foodId = itemId;
                 } else if (detail.itemType === 'drink') {
-                    detailData.drinkId = detail.itemId;
+                    detailData.drinkId = itemId;
                 } else {
-                    // Handle unknown item type if necessary
                     throw new Error(`Invalid item type: ${detail.itemType}`);
                 }
+                if (detailData.foodId === undefined && detailData.drinkId === undefined) {
+                    throw new Error(`Item type '${detail.itemType}' requires a valid foodId or drinkId.`);
+                }
+
                 return tx.orderDetail.create({ data: detailData });
             });
 
             await Promise.all(detailCreations);
 
-            // Fetch the order again with details to return the complete object
-             const completeOrder = await tx.order.findUnique({
-                where: { id: order.id },
+            // Fetch order ที่สมบูรณ์กลับไป (ตอนนี้จะมี status: 'PENDING' และ updatedAt เพิ่มมาด้วย)
+            const completeOrder = await tx.order.findUnique({
+                where: { id: Number(order.id) },
                 include: {
                     employee: true,
                     orderDetails: {
@@ -56,6 +78,9 @@ exports.createOrder = async (req, res) => {
                     }
                 }
             });
+            if (!completeOrder) {
+                throw new Error("Failed to retrieve the created order after transaction.");
+            }
             return completeOrder;
         });
 
@@ -63,32 +88,34 @@ exports.createOrder = async (req, res) => {
 
     } catch (error) {
         console.error("Error creating order:", error);
-        // Specific check for invalid item type error
-        if (error.message.startsWith('Invalid item type:')) {
-             return res.status(400).json({ message: error.message });
+        if (error.message.includes('Invalid') || error.message.includes('Missing')) {
+            return res.status(400).json({ message: error.message });
+        }
+        if (error.code && error.code.startsWith('P')) {
+            return res.status(400).json({ message: "Database error during order creation.", code: error.code });
         }
         res.status(500).json({ message: "Server Error creating order" });
     }
 };
 
-// 📌 GET ALL ORDERS
+// GET ALL ORDERS (ไม่เปลี่ยนแปลง, status และ updatedAt จะถูกดึงมาอัตโนมัติ)
 exports.getAllOrders = async (req, res) => {
     try {
         const orders = await prisma.order.findMany({
             include: {
-                employee: true, // Include employee details
+                employee: true,
                 orderDetails: {
                     include: {
-                        food: true, // Include food details if it's a food item
-                        drink: true // Include drink details if it's a drink item
+                        food: true,
+                        drink: true
                     }
                 }
             },
             orderBy: {
-                createdAt: 'desc' // Optional: Order by creation date, newest first
+                // สามารถเรียงตาม updatedAt หรือ status ได้ถ้าต้องการ
+                createdAt: 'desc'
             }
         });
-
         res.json(orders);
     } catch (error) {
         console.error("Error fetching orders:", error);
@@ -96,12 +123,17 @@ exports.getAllOrders = async (req, res) => {
     }
 };
 
-// 📌 GET ORDER BY ID
+// GET ORDER BY ID (ไม่เปลี่ยนแปลง, status และ updatedAt จะถูกดึงมาอัตโนมัติ)
 exports.getOrderById = async (req, res) => {
     try {
         const { id } = req.params;
+        const orderId = parseInt(id, 10);
+        if (isNaN(orderId)) {
+            return res.status(400).json({ message: "Invalid Order ID format." });
+        }
+
         const order = await prisma.order.findUnique({
-            where: { id: Number(id) },
+            where: { id: Number(orderId) },
             include: {
                 employee: true,
                 orderDetails: {
@@ -124,37 +156,87 @@ exports.getOrderById = async (req, res) => {
     }
 };
 
-// 📌 DELETE ORDER
+// DELETE ORDER (ไม่เปลี่ยนแปลง)
 exports.deleteOrder = async (req, res) => {
     try {
         const { id } = req.params;
+        const orderId = parseInt(id, 10);
+        if (isNaN(orderId)) {
+            return res.status(400).json({ message: "Invalid Order ID format." });
+        }
 
-        // Use a transaction to ensure both order details and the order are deleted
         await prisma.$transaction(async (tx) => {
-            // First, delete related OrderDetail records
+            const orderExists = await tx.order.findUnique({ where: { id: orderId } });
+            if (!orderExists) {
+                throw new Error("Order not found");
+            }
+
+            // ลบ OrderDetail ก่อน (ถ้ามี onDelete: Cascade ใน schema อาจจะไม่จำเป็นต้องทำ manual)
             await tx.orderDetail.deleteMany({
-                where: { ord_id: Number(id) }
+                where: { ord_id: orderId }
             });
 
-            // Then, delete the Order
-            const deletedOrder = await tx.order.delete({
-                where: { id: Number(id) }
+            // ลบ Order หลัก
+            await tx.order.delete({
+                where: { id: orderId }
             });
-
-             if (!deletedOrder) {
-                 // This case might not be reached if findUniqueOrThrow was used,
-                 // but kept for robustness depending on exact error handling desired.
-                 throw new Error("Order not found");
-             }
         });
 
         res.json({ message: "Order deleted successfully" });
     } catch (error) {
         console.error("Error deleting order:", error);
-         // Handle cases where the order might not be found if not using findUniqueOrThrow
-        if (error.code === 'P2025' || error.message === "Order not found") { // P2025 is Prisma's code for record not found
-             return res.status(404).json({ message: "Order not found" });
+        if (error.message === "Order not found" || error.code === 'P2025') {
+            return res.status(404).json({ message: "Order not found" });
         }
         res.status(500).json({ message: "Server Error deleting order" });
+    }
+};
+
+// ----- เพิ่ม FUNCTION ใหม่สำหรับอัปเดตสถานะ -----
+exports.updateOrderStatus = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { status } = req.body;
+        console.log(req.params);
+
+        const orderId = parseInt(id, 10);
+        if (isNaN(orderId)) {
+            return res.status(400).json({ message: "Invalid Order ID format." });
+        }
+
+        // ตรวจสอบว่า status ที่ส่งมาถูกต้องตาม enum หรือไม่
+        if (!status || !Object.values(OrderStatus).includes(status)) {
+            return res.status(400).json({
+                message: "Invalid or missing status. Must be one of: " + Object.values(OrderStatus).join(', ')
+            });
+        }
+
+        const updatedOrder = await prisma.order.update({
+            where: { id: Number(orderId) },
+            data: {
+                status: status, // อัปเดต status
+                // updatedAt จะถูกอัปเดตอัตโนมัติโดย @updatedAt ใน schema
+            },
+            include: { // ดึงข้อมูลทั้งหมดกลับไปเพื่อแสดงผล (เหมือน getOrderById)
+                employee: true,
+                orderDetails: {
+                    include: {
+                        food: true,
+                        drink: true
+                    }
+                }
+            }
+        });
+
+        res.json(updatedOrder);
+
+    } catch (error) {
+        console.error("Error updating order status:", error);
+        // จัดการ error กรณีหา order ไม่เจอ (P2025)
+        if (error.code === 'P2025') {
+            return res.status(404).json({ message: "Order not found" });
+        }
+        // จัดการ error อื่นๆ
+        res.status(500).json({ message: "Server Error updating order status" });
     }
 };
