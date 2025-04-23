@@ -9,7 +9,6 @@ const {
 } = require('../controller/purchaseOrder');
 
 const router = express.Router();
-router.use(cors());
 
 // Define Purchase Order routes
 router.post('/createPurchaseOrder', createPurchaseOrder);
