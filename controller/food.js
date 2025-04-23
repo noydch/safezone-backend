@@ -152,3 +152,23 @@ exports.updateFood = async (req, res) => {
         res.status(500).json({ message: "Server Error" });
     }
 };
+
+exports.getFoodAndDrinkReport = async (req, res) => {
+    try {
+        const foods = await prisma.food.findMany({
+            include: { category: true }
+        });
+
+        const drinks = await prisma.drink.findMany({
+            include: { Category: true }
+        });
+
+        res.json({
+            foods,
+            drinks
+        });
+    } catch (error) {
+        console.error("Error generating report:", error);
+        res.status(500).json({ message: "Server Error" });
+    }
+};

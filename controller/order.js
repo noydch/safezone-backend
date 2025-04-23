@@ -240,3 +240,112 @@ exports.updateOrderStatus = async (req, res) => {
         res.status(500).json({ message: "Server Error updating order status" });
     }
 };
+
+exports.getOrderReport = async (req, res) => {
+    try {
+        // Optional: ดึง query จากวันที่ (format: YYYY-MM-DD)
+        const { startDate, endDate } = req.query;
+
+        const whereClause = {};
+        if (startDate && endDate) {
+            whereClause.createdAt = {
+                gte: new Date(startDate),
+                lte: new Date(endDate)
+            };
+        }
+
+        // รวมข้อมูลรายงาน
+        const [orders, totalRevenue, totalItems] = await Promise.all([
+            prisma.order.findMany({
+                where: whereClause,
+                include: {
+                    orderDetails: true
+                }
+            }),
+            prisma.order.aggregate({
+                _sum: { total_price: true },
+                where: whereClause
+            }),
+            prisma.orderDetail.aggregate({
+                _sum: { quantity: true },
+                where: {
+                    order: whereClause
+                }
+            })
+        ]);
+
+        const totalOrders = orders.length;
+
+        res.json({
+            totalOrders,
+            totalRevenue: totalRevenue._sum.total_price || 0,
+            totalItemsSold: totalItems._sum.quantity || 0,
+            orders
+        });
+
+    } catch (error) {
+        console.error("Error generating order report:", error);
+        res.status(500).json({ message: "Server Error generating report" });
+    }
+};
+
+
+exports.getIncomeExpenseReport = async (req, res) => {
+    try {
+        const now = new Date();
+        const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+        const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59);
+
+        // รายรับจากออเดอร์ที่ชำระแล้ว
+        const incomeOrders = await prisma.order.findMany({
+            where: {
+                status: "PAID",
+                createdAt: {
+                    gte: startOfMonth,
+                    lte: endOfMonth
+                }
+            },
+            select: {
+                id: true,
+                total_price: true,
+                createdAt: true
+            }
+        });
+
+        // รายจ่ายจาก ImportReceipt ที่รับของแล้ว
+        const expenseReceipts = await prisma.importReceipt.findMany({
+            where: {
+                status: "approved",
+                createdAt: {
+                    gte: startOfMonth,
+                    lte: endOfMonth
+                }
+            },
+            select: {
+                id: true,
+                totalPrice: true,
+                createdAt: true
+            }
+        });
+
+        const totalIncome = incomeOrders.reduce((sum, order) => sum + order.total_price, 0);
+        const totalExpense = expenseReceipts.reduce((sum, receipt) => sum + receipt.totalPrice, 0);
+
+        res.json({
+            period: {
+                from: startOfMonth.toISOString(),
+                to: endOfMonth.toISOString()
+            },
+            totalIncome,
+            totalExpense,
+            netProfit: totalIncome - totalExpense,
+            incomeDetails: incomeOrders,
+            expenseDetails: expenseReceipts
+        });
+
+    } catch (error) {
+        console.error("Error generating monthly income/expense report:", error);
+        res.status(500).json({ message: "Server Error" });
+    }
+};
+
