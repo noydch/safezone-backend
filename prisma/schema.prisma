@@ -15,8 +15,9 @@ enum Gender {
 }
 
 enum Role {
-  Admin
-  Salesman
+  Owner
+  Manager
+  Cashier
   Chef
   Waiter
 }
