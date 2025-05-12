@@ -26,7 +26,7 @@ enum PaymentMethod {
   CASH // สำหรับเงินสด
   TRANSFER // สำหรับเงินโอน
 }
-
+// sss
 enum OrderStatus {
   PENDING // รอเข้าระบบ/รอครัว
   COOKING // กำลังทำ
