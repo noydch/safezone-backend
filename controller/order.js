@@ -197,7 +197,7 @@ exports.updateOrderStatus = async (req, res) => {
     try {
         const { id } = req.params;
         const { status } = req.body;
-        console.log(req.params);
+        console.log(id);
 
         const orderId = parseInt(id, 10);
         if (isNaN(orderId)) {

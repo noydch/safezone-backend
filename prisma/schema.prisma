@@ -26,6 +26,7 @@ enum PaymentMethod {
   CASH // สำหรับเงินสด
   TRANSFER // สำหรับเงินโอน
 }
+
 // sss
 enum OrderStatus {
   PENDING // รอเข้าระบบ/รอครัว
@@ -33,7 +34,6 @@ enum OrderStatus {
   READY // พร้อมเสิร์ฟ
   SERVED // เสิร์ฟแล้ว
   PAID // จ่ายแล้ว
-  CANCELLED // ยกเลิก
 }
 
 // --- Models ---

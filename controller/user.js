@@ -30,7 +30,8 @@ exports.updateEmployee = async (req, res) => {
         const { id } = req.params
         const {
             email,
-            password
+            password,
+            role
         } = req.body;
 
 
@@ -44,7 +45,8 @@ exports.updateEmployee = async (req, res) => {
             },
             data: {
                 email: email,
-                password: hashPassword
+                password: hashPassword,
+                role: role
             }
         })
 
