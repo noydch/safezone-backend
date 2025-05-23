@@ -1,21 +1,25 @@
 const prisma = require('../config/prisma');
-// ควร import OrderStatus enum เพื่อใช้ในการ validation
-const { OrderStatus } = require('@prisma/client');
+const { KitchenStatus, BillStatus, PaymentMethod } = require('@prisma/client'); // Import Enums
 
-// CREATE ORDER (ไม่เปลี่ยนแปลงจากเดิมมากนัก, status จะถูก set เป็น PENDING โดย default)
-exports.createOrder = async (req, res) => {
+// =================================================================
+// 1. เพิ่มรายการอาหาร/เครื่องดื่มในโต๊ะ (สร้าง OrderRound ใหม่)
+// =================================================================
+exports.addOrderToTable = async (req, res) => {
     try {
-        const { empId, orderDetails, paymentMethod } = req.body;
+        const { empId, tableId, orderDetails } = req.body;
 
-        if (!empId || !orderDetails || !Array.isArray(orderDetails) || orderDetails.length === 0 || !paymentMethod) {
-            return res.status(400).json({ message: "Employee ID, order details, and payment method are required." });
+        if (!empId || !tableId || !orderDetails || !Array.isArray(orderDetails) || orderDetails.length === 0) {
+            return res.status(400).json({ message: "Employee ID, Table ID, and order details are required." });
         }
 
-        if (paymentMethod !== 'CASH' && paymentMethod !== 'TRANSFER') {
-            return res.status(400).json({ message: "Invalid payment method. Must be 'CASH' or 'TRANSFER'." });
+        const parsedTableId = parseInt(tableId, 10);
+        const parsedEmpId = parseInt(empId, 10);
+
+        if (isNaN(parsedTableId) || isNaN(parsedEmpId)) {
+            return res.status(400).json({ message: "Invalid Employee ID or Table ID." });
         }
 
-        const total_price = orderDetails.reduce((sum, item) => {
+        const newItemsTotalPrice = orderDetails.reduce((sum, item) => {
             const price = parseFloat(item.price);
             const quantity = parseInt(item.quantity, 10);
             if (isNaN(price) || isNaN(quantity)) {
@@ -24,29 +28,58 @@ exports.createOrder = async (req, res) => {
             return sum + price * quantity;
         }, 0);
 
-        const newOrder = await prisma.$transaction(async (tx) => {
-            const order = await tx.order.create({
-                data: {
-                    empId: parseInt(empId),
-                    total_price: total_price,
-                    paymentMethod: paymentMethod,
-                    // status: 'PENDING' // ไม่จำเป็นต้องใส่ เพราะมี @default(PENDING) ใน schema แล้ว
-                },
+        const resultOrder = await prisma.$transaction(async (tx) => {
+            // 1. หา หรือ สร้าง Order หลัก (Main Bill)
+            let mainOrder = await tx.order.findFirst({
+                where: { tableId: parsedTableId, billStatus: BillStatus.OPEN },
             });
 
+            if (!mainOrder) {
+                mainOrder = await tx.order.create({
+                    data: {
+                        empId: parsedEmpId,
+                        tableId: parsedTableId,
+                        total_price: newItemsTotalPrice,
+                        billStatus: BillStatus.OPEN,
+                    },
+                });
+            } else {
+                mainOrder = await tx.order.update({
+                    where: { id: mainOrder.id },
+                    data: {
+                        total_price: { increment: newItemsTotalPrice },
+                        empId: parsedEmpId,
+                    },
+                });
+            }
+
+            // 2. หา Round Number ล่าสุด แล้ว +1
+            const lastRound = await tx.orderRound.findFirst({
+                where: { orderId: mainOrder.id },
+                orderBy: { roundNumber: 'desc' }
+            });
+            const nextRoundNumber = (lastRound?.roundNumber || 0) + 1;
+
+            // 3. สร้าง OrderRound ใหม่
+            const newOrderRound = await tx.orderRound.create({
+                data: {
+                    orderId: mainOrder.id,
+                    roundNumber: nextRoundNumber,
+                    kitchenStatus: KitchenStatus.PENDING, // ใช้ Enum
+                }
+            });
+
+            // 4. สร้าง OrderDetail โดยผูกกับ OrderRound ใหม่
             const detailCreations = orderDetails.map(detail => {
                 const detailData = {
-                    ord_id: Number(order.id),
+                    orderRoundId: newOrderRound.id, // <-- ผูกกับ Round ใหม่
                     quantity: parseInt(detail.quantity, 10),
                     price: parseFloat(detail.price),
                 };
 
-                if (!detail.itemId || !detail.itemType) {
-                    throw new Error(`Missing itemId or itemType for detail: ${JSON.stringify(detail)}`);
-                }
                 const itemId = parseInt(detail.itemId, 10);
-                if (isNaN(itemId)) {
-                    throw new Error(`Invalid itemId: ${detail.itemId}`);
+                if (isNaN(itemId) || !detail.itemType) {
+                    throw new Error(`Invalid/Missing itemId or itemType: ${JSON.stringify(detail)}`);
                 }
 
                 if (detail.itemType === 'food') {
@@ -56,92 +89,266 @@ exports.createOrder = async (req, res) => {
                 } else {
                     throw new Error(`Invalid item type: ${detail.itemType}`);
                 }
-                if (detailData.foodId === undefined && detailData.drinkId === undefined) {
-                    throw new Error(`Item type '${detail.itemType}' requires a valid foodId or drinkId.`);
-                }
-
                 return tx.orderDetail.create({ data: detailData });
             });
 
             await Promise.all(detailCreations);
 
-            // Fetch order ที่สมบูรณ์กลับไป (ตอนนี้จะมี status: 'PENDING' และ updatedAt เพิ่มมาด้วย)
-            const completeOrder = await tx.order.findUnique({
-                where: { id: Number(order.id) },
+            // 5. Return Order หลัก พร้อม Round และ Detail ทั้งหมด
+            return tx.order.findUnique({
+                where: { id: mainOrder.id },
                 include: {
                     employee: true,
-                    orderDetails: {
+                    table: true,
+                    orderRounds: {
                         include: {
-                            food: true,
-                            drink: true
-                        }
-                    }
-                }
+                            orderDetails: {
+                                include: { food: true, drink: true }
+                            }
+                        },
+                        orderBy: { roundNumber: 'asc' }
+                    },
+                },
             });
-            if (!completeOrder) {
-                throw new Error("Failed to retrieve the created order after transaction.");
-            }
-            return completeOrder;
+        }, {
+            timeout: 15000 // <--- เพิ่มตรงนี้ (กำหนดเป็น 15 วินาที)
         });
 
-        res.status(201).json(newOrder);
+        res.status(201).json(resultOrder);
 
     } catch (error) {
-        console.error("Error creating order:", error);
-        if (error.message.includes('Invalid') || error.message.includes('Missing')) {
-            return res.status(400).json({ message: error.message });
-        }
-        if (error.code && error.code.startsWith('P')) {
-            return res.status(400).json({ message: "Database error during order creation.", code: error.code });
-        }
-        res.status(500).json({ message: "Server Error creating order" });
+        console.error("Error creating/updating order:", error);
+        res.status(500).json({ message: "Server Error processing order", error: error.message });
     }
 };
 
-// GET ALL ORDERS (ไม่เปลี่ยนแปลง, status และ updatedAt จะถูกดึงมาอัตโนมัติ)
-exports.getAllOrders = async (req, res) => {
+// =================================================================
+// 2. ชำระเงิน / ปิดบิล (Logic คล้ายเดิม แต่แก้ include)
+// =================================================================
+exports.checkoutOrder = async (req, res) => {
     try {
-        const orders = await prisma.order.findMany({
-            include: {
+        const { orderId } = req.params;
+        const { paymentMethod } = req.body;
+
+        const parsedOrderId = parseInt(orderId, 10);
+        if (isNaN(parsedOrderId)) {
+            return res.status(400).json({ message: "Invalid Order ID." });
+        }
+
+        if (!paymentMethod || !Object.values(PaymentMethod).includes(paymentMethod)) {
+            return res.status(400).json({
+                message: "Invalid or missing payment method. Must be one of: " + Object.values(PaymentMethod).join(', ')
+            });
+        }
+
+        const currentOrder = await prisma.order.findUnique({
+            where: { id: parsedOrderId }
+        });
+
+        if (!currentOrder) {
+            return res.status(404).json({ message: "Order not found." });
+        }
+
+        if (currentOrder.billStatus !== BillStatus.OPEN) {
+            return res.status(400).json({ message: `Order is not OPEN. Current status: ${currentOrder.billStatus}` });
+        }
+
+        const updatedOrder = await prisma.order.update({
+            where: { id: parsedOrderId },
+            data: {
+                billStatus: BillStatus.PAID, // ใช้ Enum
+                payment_method: paymentMethod, // ใช้ payment_method ตาม schema
+            },
+            include: { // <-- แก้ไข include
                 employee: true,
+                table: true,
+                orderRounds: {
+                    include: {
+                        orderDetails: { include: { food: true, drink: true } }
+                    },
+                    orderBy: { roundNumber: 'asc' }
+                },
+            }
+        });
+
+        res.json({ message: "Order paid successfully", order: updatedOrder });
+
+    } catch (error) {
+        console.error("Error checking out order:", error);
+        if (error.code === 'P2025') {
+            return res.status(404).json({ message: "Order not found." });
+        }
+        res.status(500).json({ message: "Server Error during checkout", error: error.message });
+    }
+};
+
+// =================================================================
+// 3. ยกเลิกออเดอร์ (Logic คล้ายเดิม แต่แก้ include)
+// =================================================================
+exports.cancelOrder = async (req, res) => {
+    try {
+        const { orderId } = req.params;
+        const parsedOrderId = parseInt(orderId, 10);
+
+        if (isNaN(parsedOrderId)) {
+            return res.status(400).json({ message: "Invalid Order ID." });
+        }
+
+        const currentOrder = await prisma.order.findUnique({
+            where: { id: parsedOrderId }
+        });
+
+        if (!currentOrder) {
+            return res.status(404).json({ message: "Order not found." });
+        }
+
+        if (currentOrder.billStatus !== BillStatus.OPEN) {
+            return res.status(400).json({ message: `Cannot cancel. Order status is ${currentOrder.billStatus}.` });
+        }
+
+        const cancelledOrder = await prisma.order.update({
+            where: { id: parsedOrderId },
+            data: {
+                billStatus: BillStatus.CANCELLED, // ใช้ Enum
+            },
+            include: { // <-- แก้ไข include
+                employee: true,
+                table: true,
+                orderRounds: {
+                    include: {
+                        orderDetails: { include: { food: true, drink: true } }
+                    },
+                    orderBy: { roundNumber: 'asc' }
+                },
+            }
+        });
+
+        res.json({ message: "Order cancelled successfully", order: cancelledOrder });
+
+    } catch (error) {
+        console.error("Error cancelling order:", error);
+        if (error.code === 'P2025') {
+            return res.status(404).json({ message: "Order not found." });
+        }
+        res.status(500).json({ message: "Server Error cancelling order", error: error.message });
+    }
+};
+
+exports.updateRoundKitchenStatus = async (req, res) => {
+    try {
+        // 1. รับค่า roundId จาก URL parameters
+        const { roundId } = req.params;
+        // 2. รับค่า status ใหม่จาก Request Body
+        const { status } = req.body;
+
+        // 3. แปลง roundId เป็นตัวเลข (Integer)
+        const parsedRoundId = parseInt(roundId, 10);
+
+        // 4. ตรวจสอบว่า roundId เป็นตัวเลขที่ถูกต้องหรือไม่
+        if (isNaN(parsedRoundId)) {
+            return res.status(400).json({ message: "Invalid Order Round ID format. Must be a number." });
+        }
+
+        // 5. ตรวจสอบว่า status ที่ส่งมา มีค่าตรงกับ Enum KitchenStatus หรือไม่
+        if (!status || !Object.values(KitchenStatus).includes(status)) {
+            return res.status(400).json({
+                message: `Invalid or missing kitchen status. Must be one of: ${Object.values(KitchenStatus).join(', ')}`
+            });
+        }
+
+        // 6. ทำการอัปเดตข้อมูลในฐานข้อมูล
+        const updatedRound = await prisma.orderRound.update({
+            where: {
+                id: parsedRoundId, // ใช้ ID ที่แปลงแล้วในการค้นหา
+            },
+            data: {
+                kitchenStatus: status, // กำหนดค่า kitchenStatus ใหม่
+            },
+            include: {
+                // ส่งข้อมูล OrderDetail กลับไปด้วย (ถ้าต้องการ)
                 orderDetails: {
                     include: {
                         food: true,
-                        drink: true
+                        drink: true,
+                    },
+                },
+                // ส่งข้อมูล Order หลักกลับไปด้วย (ถ้าต้องการ)
+                order: {
+                    include: {
+                        table: true,
                     }
                 }
             },
+        });
+
+        // 7. ส่งข้อมูลที่อัปเดตแล้วกลับไปเป็น JSON response
+        console.log(`OrderRound ID: ${parsedRoundId} updated to status: ${status}`);
+        res.status(200).json(updatedRound);
+
+    } catch (error) {
+        console.error("Error updating order round status:", error);
+
+        // 8. จัดการ Error ที่อาจเกิดขึ้น
+        // กรณีหา Record ที่จะอัปเดตไม่เจอ (Prisma Code P2025)
+        if (error.code === 'P2025') {
+            return res.status(404).json({ message: `Order Round with ID ${req.params.roundId} not found.` });
+        }
+
+        // Error อื่นๆ ที่ไม่คาดคิด
+        res.status(500).json({ message: "Server Error updating order round status", error: error.message });
+    }
+};
+
+// =================================================================
+// 5. ดึงข้อมูลออเดอร์ทั้งหมด (แก้ include)
+// =================================================================
+exports.getAllOrders = async (req, res) => {
+    try {
+        const orders = await prisma.order.findMany({
+            include: { // <-- แก้ไข include
+                employee: true,
+                table: true,
+                orderRounds: {
+                    include: {
+                        orderDetails: { include: { food: true, drink: true } }
+                    },
+                    orderBy: { roundNumber: 'asc' }
+                },
+            },
             orderBy: {
-                // สามารถเรียงตาม updatedAt หรือ status ได้ถ้าต้องการ
-                createdAt: 'desc'
+                createdAt: 'desc',
             }
         });
         res.json(orders);
     } catch (error) {
         console.error("Error fetching orders:", error);
-        res.status(500).json({ message: "Server Error fetching orders" });
+        res.status(500).json({ message: "Server Error fetching orders", error: error.message });
     }
 };
 
-// GET ORDER BY ID (ไม่เปลี่ยนแปลง, status และ updatedAt จะถูกดึงมาอัตโนมัติ)
+// =================================================================
+// 6. ดึงข้อมูลออเดอร์ตาม ID (แก้ include)
+// =================================_
 exports.getOrderById = async (req, res) => {
     try {
         const { id } = req.params;
         const orderId = parseInt(id, 10);
+
         if (isNaN(orderId)) {
             return res.status(400).json({ message: "Invalid Order ID format." });
         }
 
         const order = await prisma.order.findUnique({
-            where: { id: Number(orderId) },
-            include: {
+            where: { id: orderId },
+            include: { // <-- แก้ไข include
                 employee: true,
-                orderDetails: {
+                table: true,
+                orderRounds: {
                     include: {
-                        food: true,
-                        drink: true
-                    }
-                }
+                        orderDetails: { include: { food: true, drink: true } }
+                    },
+                    orderBy: { roundNumber: 'asc' }
+                },
             }
         });
 
@@ -152,132 +359,125 @@ exports.getOrderById = async (req, res) => {
         res.json(order);
     } catch (error) {
         console.error("Error fetching order by ID:", error);
-        res.status(500).json({ message: "Server Error fetching order" });
+        res.status(500).json({ message: "Server Error fetching order", error: error.message });
     }
 };
 
-// DELETE ORDER (ไม่เปลี่ยนแปลง)
+// =================================================================
+// 7. ดึงข้อมูลออเดอร์ที่ 'OPEN' อยู่ตาม Table ID (แก้ include)
+// =================================================================
+exports.getOpenOrderByTableId = async (req, res) => {
+    try {
+        const { tableId } = req.params;
+        const parsedTableId = parseInt(tableId, 10);
+
+        if (isNaN(parsedTableId)) {
+            return res.status(400).json({ message: "Invalid Table ID format." });
+        }
+
+        const order = await prisma.order.findFirst({
+            where: {
+                tableId: parsedTableId,
+                billStatus: BillStatus.OPEN, // ใช้ Enum
+            },
+            include: { // <-- แก้ไข include
+                employee: true,
+                table: true,
+                orderRounds: {
+                    include: {
+                        orderDetails: { include: { food: true, drink: true } }
+                    },
+                    orderBy: { roundNumber: 'asc' }
+                },
+            }
+        });
+
+        if (!order) {
+            return res.status(404).json({ message: "No open order found for this table." });
+        }
+
+        res.json(order);
+    } catch (error) {
+        console.error("Error fetching open order by table:", error);
+        res.status(500).json({ message: "Server Error fetching order", error: error.message });
+    }
+};
+
+
+// =================================================================
+// 8. ลบออเดอร์ (ปรับปรุงให้ลบ Order หลัก - ถ้า Schema มี Cascade จะลบ Round/Detail ด้วย)
+// =================================================================
 exports.deleteOrder = async (req, res) => {
     try {
         const { id } = req.params;
         const orderId = parseInt(id, 10);
+
         if (isNaN(orderId)) {
             return res.status(400).json({ message: "Invalid Order ID format." });
         }
 
-        await prisma.$transaction(async (tx) => {
-            const orderExists = await tx.order.findUnique({ where: { id: orderId } });
-            if (!orderExists) {
-                throw new Error("Order not found");
-            }
-
-            // ลบ OrderDetail ก่อน (ถ้ามี onDelete: Cascade ใน schema อาจจะไม่จำเป็นต้องทำ manual)
-            await tx.orderDetail.deleteMany({
-                where: { ord_id: orderId }
-            });
-
-            // ลบ Order หลัก
-            await tx.order.delete({
-                where: { id: orderId }
-            });
+        // เราจะลบ Order หลัก ถ้า Schema ตั้ง onDelete: Cascade ไว้
+        // OrderRound และ OrderDetail ที่เกี่ยวข้องจะถูกลบไปด้วย
+        // **ตรวจสอบให้แน่ใจว่าคุณได้ตั้ง onDelete: Cascade ใน Schema!**
+        await prisma.order.delete({
+            where: { id: orderId }
         });
 
-        res.json({ message: "Order deleted successfully" });
+        res.json({ message: "Order and its rounds/details deleted successfully" });
+
     } catch (error) {
         console.error("Error deleting order:", error);
-        if (error.message === "Order not found" || error.code === 'P2025') {
-            return res.status(404).json({ message: "Order not found" });
-        }
-        res.status(500).json({ message: "Server Error deleting order" });
-    }
-};
-
-// ----- เพิ่ม FUNCTION ใหม่สำหรับอัปเดตสถานะ -----
-exports.updateOrderStatus = async (req, res) => {
-    try {
-        const { id } = req.params;
-        const { status } = req.body;
-        console.log(id);
-
-        const orderId = parseInt(id, 10);
-        if (isNaN(orderId)) {
-            return res.status(400).json({ message: "Invalid Order ID format." });
-        }
-
-        // ตรวจสอบว่า status ที่ส่งมาถูกต้องตาม enum หรือไม่
-        if (!status || !Object.values(OrderStatus).includes(status)) {
-            return res.status(400).json({
-                message: "Invalid or missing status. Must be one of: " + Object.values(OrderStatus).join(', ')
-            });
-        }
-
-        const updatedOrder = await prisma.order.update({
-            where: { id: Number(orderId) },
-            data: {
-                status: status, // อัปเดต status
-                // updatedAt จะถูกอัปเดตอัตโนมัติโดย @updatedAt ใน schema
-            },
-            include: { // ดึงข้อมูลทั้งหมดกลับไปเพื่อแสดงผล (เหมือน getOrderById)
-                employee: true,
-                orderDetails: {
-                    include: {
-                        food: true,
-                        drink: true
-                    }
-                }
-            }
-        });
-
-        res.json(updatedOrder);
-
-    } catch (error) {
-        console.error("Error updating order status:", error);
-        // จัดการ error กรณีหา order ไม่เจอ (P2025)
         if (error.code === 'P2025') {
             return res.status(404).json({ message: "Order not found" });
         }
-        // จัดการ error อื่นๆ
-        res.status(500).json({ message: "Server Error updating order status" });
+        res.status(500).json({ message: "Server Error deleting order", error: error.message });
     }
 };
 
+
+// =================================================================
+// 9. รายงานยอดขาย (แก้ไขการนับ totalItems)
+// =================================================================
 exports.getOrderReport = async (req, res) => {
     try {
-        // Optional: ดึง query จากวันที่ (format: YYYY-MM-DD)
         const { startDate, endDate } = req.query;
+        const whereClause = { billStatus: BillStatus.PAID }; // ใช้ Enum
 
-        const whereClause = {};
         if (startDate && endDate) {
-            whereClause.createdAt = {
+            whereClause.updatedAt = {
                 gte: new Date(startDate),
-                lte: new Date(endDate)
+                lte: new Date(new Date(endDate).setHours(23, 59, 59, 999))
             };
         }
 
-        // รวมข้อมูลรายงาน
         const [orders, totalRevenue, totalItems] = await Promise.all([
             prisma.order.findMany({
                 where: whereClause,
-                include: {
-                    orderDetails: true
+                include: { // <-- แก้ไข include
+                    employee: true,
+                    table: true,
+                    orderRounds: {
+                        include: { orderDetails: true }
+                    },
                 }
             }),
             prisma.order.aggregate({
                 _sum: { total_price: true },
                 where: whereClause
             }),
+            // <-- แก้ไขการนับ Item: ต้องกรองผ่าน OrderRound -> Order
             prisma.orderDetail.aggregate({
                 _sum: { quantity: true },
                 where: {
-                    order: whereClause
+                    orderRound: { // กรองผ่าน OrderRound
+                        order: whereClause // ใช้ whereClause หลักที่นี่
+                    }
                 }
             })
         ]);
 
-        const totalOrders = orders.length;
-
         res.json({
-            totalOrders,
+            totalOrders: orders.length,
             totalRevenue: totalRevenue._sum.total_price || 0,
             totalItemsSold: totalItems._sum.quantity || 0,
             orders
@@ -285,48 +485,39 @@ exports.getOrderReport = async (req, res) => {
 
     } catch (error) {
         console.error("Error generating order report:", error);
-        res.status(500).json({ message: "Server Error generating report" });
+        res.status(500).json({ message: "Server Error generating report", error: error.message });
     }
 };
-// 
 
-
+// =================================================================
+// 10. รายงานรายรับ-รายจ่าย (ไม่เปลี่ยนแปลง)
+// =================================================================
 exports.getIncomeExpenseReport = async (req, res) => {
     try {
         const now = new Date();
         const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
         const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59);
 
-        // รายรับจากออเดอร์ที่ชำระแล้ว
         const incomeOrders = await prisma.order.findMany({
             where: {
-                status: "PAID",
-                createdAt: {
+                billStatus: BillStatus.PAID, // ใช้ Enum
+                updatedAt: {
                     gte: startOfMonth,
                     lte: endOfMonth
                 }
             },
-            select: {
-                id: true,
-                total_price: true,
-                createdAt: true
-            }
+            select: { id: true, total_price: true, updatedAt: true }
         });
 
-        // รายจ่ายจาก ImportReceipt ที่รับของแล้ว
         const expenseReceipts = await prisma.importReceipt.findMany({
             where: {
-                status: "approved",
+                status: "approved", // <-- ต้องแน่ใจว่ามี status นี้
                 createdAt: {
                     gte: startOfMonth,
                     lte: endOfMonth
                 }
             },
-            select: {
-                id: true,
-                totalPrice: true,
-                createdAt: true
-            }
+            select: { id: true, totalPrice: true, createdAt: true }
         });
 
         const totalIncome = incomeOrders.reduce((sum, order) => sum + order.total_price, 0);
@@ -346,7 +537,6 @@ exports.getIncomeExpenseReport = async (req, res) => {
 
     } catch (error) {
         console.error("Error generating monthly income/expense report:", error);
-        res.status(500).json({ message: "Server Error" });
+        res.status(500).json({ message: "Server Error", error: error.message });
     }
 };
-

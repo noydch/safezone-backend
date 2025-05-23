@@ -6,7 +6,7 @@ CREATE TABLE `Employee` (
     `gender` ENUM('Male', 'Female', 'Other') NOT NULL,
     `phone` VARCHAR(191) NOT NULL,
     `dob` DATETIME(3) NOT NULL,
-    `role` ENUM('Admin', 'Salesman', 'Chef', 'Waiter') NOT NULL,
+    `role` ENUM('Owner', 'Manager', 'Cashier', 'Chef', 'Waiter') NOT NULL,
     `email` VARCHAR(191) NOT NULL,
     `password` VARCHAR(191) NOT NULL,
     `createdAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
@@ -101,6 +101,7 @@ CREATE TABLE `ImportReceipt` (
     `status` VARCHAR(191) NOT NULL DEFAULT 'pending',
     `createdAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
     `updatedAt` DATETIME(3) NOT NULL,
+    `purchaseOrderId` INTEGER NULL,
 
     PRIMARY KEY (`id`)
 ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
@@ -121,10 +122,14 @@ CREATE TABLE `ImportDetail` (
 CREATE TABLE `Order` (
     `id` INTEGER NOT NULL AUTO_INCREMENT,
     `empId` INTEGER NOT NULL,
+    `tableId` INTEGER NOT NULL,
     `orderDate` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
     `total_price` DOUBLE NOT NULL,
-    `paymentMethod` ENUM('CASH', 'TRANSFER') NOT NULL,
+    `kitchenStatus` ENUM('PENDING', 'COOKING', 'READY', 'SERVED') NOT NULL DEFAULT 'PENDING',
+    `billStatus` ENUM('OPEN', 'PAID', 'CANCELLED') NOT NULL DEFAULT 'OPEN',
+    `paymentMethod` ENUM('CASH', 'TRANSFER') NULL,
     `createdAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    `updatedAt` DATETIME(3) NULL,
 
     PRIMARY KEY (`id`)
 ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
@@ -196,6 +201,12 @@ ALTER TABLE `PurchaseOrderDetail` ADD CONSTRAINT `PurchaseOrderDetail_poId_fkey`
 ALTER TABLE `PurchaseOrderDetail` ADD CONSTRAINT `PurchaseOrderDetail_drinkId_fkey` FOREIGN KEY (`drinkId`) REFERENCES `Drink`(`id`) ON DELETE RESTRICT ON UPDATE CASCADE;
 
 -- AddForeignKey
+ALTER TABLE `ImportReceipt` ADD CONSTRAINT `ImportReceipt_supplierId_fkey` FOREIGN KEY (`supplierId`) REFERENCES `Supplier`(`id`) ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE `ImportReceipt` ADD CONSTRAINT `ImportReceipt_purchaseOrderId_fkey` FOREIGN KEY (`purchaseOrderId`) REFERENCES `PurchaseOrder`(`id`) ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
 ALTER TABLE `ImportDetail` ADD CONSTRAINT `ImportDetail_importId_fkey` FOREIGN KEY (`importId`) REFERENCES `ImportReceipt`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
@@ -205,7 +216,10 @@ ALTER TABLE `ImportDetail` ADD CONSTRAINT `ImportDetail_drinkId_fkey` FOREIGN KE
 ALTER TABLE `Order` ADD CONSTRAINT `Order_empId_fkey` FOREIGN KEY (`empId`) REFERENCES `Employee`(`id`) ON DELETE RESTRICT ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE `OrderDetail` ADD CONSTRAINT `OrderDetail_ord_id_fkey` FOREIGN KEY (`ord_id`) REFERENCES `Order`(`id`) ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE `Order` ADD CONSTRAINT `Order_tableId_fkey` FOREIGN KEY (`tableId`) REFERENCES `Table`(`id`) ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE `OrderDetail` ADD CONSTRAINT `OrderDetail_ord_id_fkey` FOREIGN KEY (`ord_id`) REFERENCES `Order`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE `OrderDetail` ADD CONSTRAINT `OrderDetail_foodId_fkey` FOREIGN KEY (`foodId`) REFERENCES `Food`(`id`) ON DELETE SET NULL ON UPDATE CASCADE;

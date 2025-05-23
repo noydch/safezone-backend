@@ -8,6 +8,7 @@ const router = express.Router()
 router.use(cors())
 
 router.post('/login', login)
-router.post('/register', authCheck, roleCheck("Owner"), register)
+router.post('/register', register)
+// router.post('/register', authCheck, roleCheck("Owner"), register)
 
 module.exports = router

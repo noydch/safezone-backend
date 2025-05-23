@@ -22,18 +22,25 @@ enum Role {
   Waiter
 }
 
-enum PaymentMethod {
-  CASH // สำหรับเงินสด
-  TRANSFER // สำหรับเงินโอน
-}
-
-// sss
-enum OrderStatus {
+// สถานะครัว (ใช้ตัวนี้เป็นหลัก)
+enum KitchenStatus {
   PENDING // รอเข้าระบบ/รอครัว
   COOKING // กำลังทำ
   READY // พร้อมเสิร์ฟ
   SERVED // เสิร์ฟแล้ว
-  PAID // จ่ายแล้ว
+}
+
+// สถานะบิล
+enum BillStatus {
+  OPEN // โต๊ะเปิดอยู่, สั่งเพิ่มได้, ยังไม่ชำระ
+  PAID // ชำระเงินแล้ว
+  CANCELLED // ยกเลิก
+}
+
+// วิธีการชำระเงิน
+enum PaymentMethod {
+  CASH // สำหรับเงินสด
+  TRANSFER // สำหรับเงินโอน
 }
 
 // --- Models ---
@@ -50,6 +57,8 @@ model Employee {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
   orders    Order[]
+
+  @@map("employees")
 }
 
 model Category {
@@ -59,6 +68,8 @@ model Category {
   drinks    Drink[]
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  @@map("categories")
 }
 
 model Food {
@@ -71,6 +82,25 @@ model Food {
   createdAt    DateTime      @default(now())
   updatedAt    DateTime      @updatedAt
   orderDetails OrderDetail[]
+
+  @@map("foods")
+}
+
+model Drink {
+  id              Int                   @id @default(autoincrement())
+  name            String
+  qty             Int?
+  price           Float // <-- เปลี่ยนเป็น Float
+  imageUrl        String
+  createdAt       DateTime              @default(now())
+  updatedAt       DateTime              @updatedAt
+  purchaseDetails PurchaseOrderDetail[]
+  importDetails   ImportDetail[]
+  Category        Category?             @relation(fields: [categoryId], references: [id])
+  categoryId      Int?
+  OrderDetail     OrderDetail[]
+
+  @@map("drinks")
 }
 
 model Supplier {
@@ -83,21 +113,8 @@ model Supplier {
   createdAt      DateTime        @default(now())
   updatedAt      DateTime        @updatedAt
   ImportReceipt  ImportReceipt[]
-}
 
-model Drink {
-  id              Int                   @id @default(autoincrement())
-  name            String
-  qty             Int?
-  price           Decimal
-  imageUrl        String
-  createdAt       DateTime              @default(now())
-  updatedAt       DateTime              @updatedAt
-  purchaseDetails PurchaseOrderDetail[]
-  importDetails   ImportDetail[]
-  Category        Category?             @relation(fields: [categoryId], references: [id])
-  categoryId      Int?
-  OrderDetail     OrderDetail[]
+  @@map("suppliers")
 }
 
 model PurchaseOrder {
@@ -111,6 +128,8 @@ model PurchaseOrder {
   updatedAt     DateTime              @updatedAt
   details       PurchaseOrderDetail[]
   ImportReceipt ImportReceipt[]
+
+  @@map("purchase_orders")
 }
 
 model PurchaseOrderDetail {
@@ -122,6 +141,8 @@ model PurchaseOrderDetail {
   quantity      Int
   price         Float
   createdAt     DateTime      @default(now())
+
+  @@map("purchase_order_details")
 }
 
 model ImportReceipt {
@@ -136,6 +157,8 @@ model ImportReceipt {
   details         ImportDetail[]
   purchaseOrderId Int?
   purchaseOrder   PurchaseOrder? @relation(fields: [purchaseOrderId], references: [id])
+
+  @@map("import_receipts")
 }
 
 model ImportDetail {
@@ -147,43 +170,75 @@ model ImportDetail {
   quantity      Int
   price         Float
   createdAt     DateTime      @default(now())
-}
 
-model Order {
-  id            Int           @id @default(autoincrement())
-  employee      Employee      @relation(fields: [empId], references: [id])
-  empId         Int
-  orderDate     DateTime      @default(now())
-  total_price   Float
-  paymentMethod PaymentMethod
-  status        OrderStatus   @default(PENDING) // เพิ่มสถานะออเดอร์
-  createdAt     DateTime      @default(now())
-  updatedAt     DateTime?     @updatedAt // เปลี่ยนเป็น DateTime? (Optional)
-  orderDetails  OrderDetail[]
-}
-
-model OrderDetail {
-  id        Int      @id @default(autoincrement())
-  order     Order    @relation(fields: [ord_id], references: [id], onDelete: Cascade) // เพิ่ม onDelete: Cascade
-  ord_id    Int
-  food      Food?    @relation(fields: [foodId], references: [id])
-  foodId    Int?
-  drink     Drink?   @relation(fields: [drinkId], references: [id])
-  drinkId   Int?
-  quantity  Int
-  price     Float
-  createdAt DateTime @default(now())
+  @@map("import_details")
 }
 
 model Table {
   id           Int           @id @default(autoincrement())
-  table_number Int
-  status       String        @default("ວ່າງ") // อาจจะเปลี่ยนเป็น Enum TableStatus ได้ในอนาคต
+  table_number Int // <-- คงเป็น Int ตามเดิม
+  status       String        @default("ວ່າງ")
   seat         Int
   createdAt    DateTime      @default(now())
   updatedAt    DateTime      @updatedAt
   Reservation  Reservation[]
+  Order        Order[]
+
+  @@map("tables")
 }
+
+// === ส่วนของ Order ที่แก้ไขแล้ว ===
+
+model Order {
+  id             Int            @id @default(autoincrement())
+  employee       Employee       @relation(fields: [empId], references: [id])
+  empId          Int
+  table          Table          @relation(fields: [tableId], references: [id])
+  tableId        Int
+  orderDate      DateTime       @default(now())
+  total_price    Float
+  // kitchenStatus KitchenStatus   @default(PENDING) // <-- เอาออก
+  billStatus     BillStatus     @default(OPEN)
+  payment_method PaymentMethod?
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt // <-- เปลี่ยนเป็น @updatedAt
+  orderRounds    OrderRound[] // <-- เพิ่ม: เชื่อมไปยัง OrderRound
+
+  @@map("orders")
+}
+
+// +++ ตาราง OrderRound ที่เพิ่มเข้ามาใหม่ +++
+model OrderRound {
+  id            Int           @id @default(autoincrement())
+  orderId       Int // FK ไปยัง Order หลัก
+  roundNumber   Int // ลำดับรอบ (1, 2, 3...)
+  kitchenStatus KitchenStatus @default(PENDING) // <-- สถานะครัวอยู่ที่นี่
+  createdAt     DateTime      @default(now())
+
+  order        Order         @relation(fields: [orderId], references: [id], onDelete: Cascade) // ถ้า Order หลักถูกลบ รอบก็จะถูกลบด้วย
+  orderDetails OrderDetail[] // 1 รอบ มีหลาย OrderDetail
+
+  @@map("order_rounds")
+}
+
+model OrderDetail {
+  id           Int        @id @default(autoincrement())
+  // order     Order      @relation(fields: [ord_id], references: [id], onDelete: Cascade)
+  // ord_id    Int        // <-- เอาออก
+  orderRound   OrderRound @relation(fields: [orderRoundId], references: [id], onDelete: Cascade) // <-- เพิ่ม: เชื่อมไปยัง OrderRound
+  orderRoundId Int // <-- เพิ่ม
+  food         Food?      @relation(fields: [foodId], references: [id])
+  foodId       Int?
+  drink        Drink?     @relation(fields: [drinkId], references: [id])
+  drinkId      Int?
+  quantity     Int
+  price        Float
+  createdAt    DateTime   @default(now())
+
+  @@map("order_details")
+}
+
+// === ส่วนของ Customer และ Reservation (คงเดิม) ===
 
 model Customer {
   id          Int           @id @default(autoincrement())
@@ -193,6 +248,8 @@ model Customer {
   createdAt   DateTime      @default(now())
   updatedAt   DateTime      @updatedAt
   Reservation Reservation[]
+
+  @@map("customers")
 }
 
 model Reservation {
@@ -202,7 +259,9 @@ model Reservation {
   table           Table    @relation(fields: [tableId], references: [id])
   tableId         Int
   reservationTime DateTime
-  status          String   @default("pending") // เช่น pending, confirmed, cancelled - อาจจะเปลี่ยนเป็น Enum ReservationStatus ได้
+  status          String   @default("pending")
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
+
+  @@map("reservations")
 }
