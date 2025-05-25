@@ -19,6 +19,16 @@ exports.addOrderToTable = async (req, res) => {
             return res.status(400).json({ message: "Invalid Employee ID or Table ID." });
         }
 
+        // --- ⬇️ (แนะนำ) ตรวจสอบโต๊ะก่อนเริ่ม Transaction ⬇️ ---
+        const tableExists = await prisma.table.findUnique({
+            where: { id: parsedTableId }
+        });
+
+        if (!tableExists) {
+            return res.status(404).json({ message: "Table not found." });
+        }
+        // --- ⬆️ สิ้นสุดการตรวจสอบโต๊ะ ⬆️ ---
+
         const newItemsTotalPrice = orderDetails.reduce((sum, item) => {
             const price = parseFloat(item.price);
             const quantity = parseInt(item.quantity, 10);
@@ -48,7 +58,7 @@ exports.addOrderToTable = async (req, res) => {
                     where: { id: mainOrder.id },
                     data: {
                         total_price: { increment: newItemsTotalPrice },
-                        empId: parsedEmpId,
+                        empId: parsedEmpId, // อัปเดตพนักงานที่รับออเดอร์ล่าสุด
                     },
                 });
             }
@@ -65,14 +75,14 @@ exports.addOrderToTable = async (req, res) => {
                 data: {
                     orderId: mainOrder.id,
                     roundNumber: nextRoundNumber,
-                    kitchenStatus: KitchenStatus.PENDING, // ใช้ Enum
+                    kitchenStatus: KitchenStatus.PENDING,
                 }
             });
 
             // 4. สร้าง OrderDetail โดยผูกกับ OrderRound ใหม่
             const detailCreations = orderDetails.map(detail => {
                 const detailData = {
-                    orderRoundId: newOrderRound.id, // <-- ผูกกับ Round ใหม่
+                    orderRoundId: newOrderRound.id,
                     quantity: parseInt(detail.quantity, 10),
                     price: parseFloat(detail.price),
                 };
@@ -94,12 +104,20 @@ exports.addOrderToTable = async (req, res) => {
 
             await Promise.all(detailCreations);
 
-            // 5. Return Order หลัก พร้อม Round และ Detail ทั้งหมด
+            // --- ⬇️ 5. อัปเดตสถานะโต๊ะเป็น 'ຖືກຈອງແລ້ວ' (เพิ่มเข้ามา) ⬇️ ---
+            await tx.table.update({
+                where: { id: parsedTableId },
+                data: { status: 'ຖືກຈອງແລ້ວ' }
+            });
+            // --- ⬆️ สิ้นสุดการอัปเดตโต๊ะ ⬆️ ---
+
+
+            // 6. Return Order หลัก พร้อม Round และ Detail ทั้งหมด
             return tx.order.findUnique({
                 where: { id: mainOrder.id },
                 include: {
                     employee: true,
-                    table: true,
+                    table: true, // Include table เพื่อให้เห็นสถานะใหม่ (ถ้าต้องการ)
                     orderRounds: {
                         include: {
                             orderDetails: {
@@ -111,7 +129,7 @@ exports.addOrderToTable = async (req, res) => {
                 },
             });
         }, {
-            timeout: 15000 // <--- เพิ่มตรงนี้ (กำหนดเป็น 15 วินาที)
+            timeout: 15000
         });
 
         res.status(201).json(resultOrder);
@@ -135,12 +153,15 @@ exports.checkoutOrder = async (req, res) => {
             return res.status(400).json({ message: "Invalid Order ID." });
         }
 
-        if (!paymentMethod || !Object.values(PaymentMethod).includes(paymentMethod)) {
+        // ตรวจสอบ PaymentMethod (ปรับปรุงให้รองรับ Enum หรือ String)
+        const allowedPaymentMethods = Object.values(PaymentMethod);
+        if (!paymentMethod || !allowedPaymentMethods.includes(paymentMethod)) {
             return res.status(400).json({
-                message: "Invalid or missing payment method. Must be one of: " + Object.values(PaymentMethod).join(', ')
+                message: "Invalid or missing payment method. Must be one of: " + allowedPaymentMethods.join(', ')
             });
         }
 
+        // --- ⬇️ ค้นหา Order และตรวจสอบสถานะ (ก่อน Transaction) ⬇️ ---
         const currentOrder = await prisma.order.findUnique({
             where: { id: parsedOrderId }
         });
@@ -153,30 +174,53 @@ exports.checkoutOrder = async (req, res) => {
             return res.status(400).json({ message: `Order is not OPEN. Current status: ${currentOrder.billStatus}` });
         }
 
-        const updatedOrder = await prisma.order.update({
-            where: { id: parsedOrderId },
-            data: {
-                billStatus: BillStatus.PAID, // ใช้ Enum
-                payment_method: paymentMethod, // ใช้ payment_method ตาม schema
-            },
-            include: { // <-- แก้ไข include
-                employee: true,
-                table: true,
-                orderRounds: {
-                    include: {
-                        orderDetails: { include: { food: true, drink: true } }
-                    },
-                    orderBy: { roundNumber: 'asc' }
-                },
-            }
-        });
+        // ตรวจสอบว่า Order มี Table ID หรือไม่
+        if (!currentOrder.tableId) {
+            return res.status(500).json({ message: "Internal Error: Order is not associated with a table." });
+        }
+        // --- ⬆️ สิ้นสุดการค้นหาและตรวจสอบ ⬆️ ---
 
-        res.json({ message: "Order paid successfully", order: updatedOrder });
+
+        // --- ⬇️ เริ่ม Transaction ⬇️ ---
+        const updatedOrder = await prisma.$transaction(async (tx) => {
+            // 1. อัปเดตสถานะ Order เป็น PAID
+            const order = await tx.order.update({
+                where: { id: parsedOrderId },
+                data: {
+                    billStatus: BillStatus.PAID,
+                    payment_method: paymentMethod,
+                },
+                include: { // Include ข้อมูลสำหรับ Response
+                    employee: true,
+                    table: true, // จะยังเห็นสถานะโต๊ะเป็น 'ຖືກຈອງແລ້ວ' ในขั้นนี้
+                    orderRounds: {
+                        include: {
+                            orderDetails: { include: { food: true, drink: true } }
+                        },
+                        orderBy: { roundNumber: 'asc' }
+                    },
+                }
+            });
+
+            // 2. อัปเดตสถานะโต๊ะกลับเป็น 'ວ່າງ'
+            await tx.table.update({
+                where: { id: currentOrder.tableId }, // ใช้ tableId จาก Order ที่หาเจอ
+                data: { status: 'ວ່າງ' } // ⬅️ เปลี่ยนสถานะโต๊ะเป็น 'ว่าง'
+            });
+
+            return order; // ส่งคืน Order ที่อัปเดตแล้ว
+        });
+        // --- ⬆️ สิ้นสุด Transaction ⬆️ ---
+
+        // (ทางเลือก) ถ้าอยากให้ 'table' ใน response เป็นสถานะ 'ວ່າງ' ทันที
+        // updatedOrder.table.status = 'ວ່າງ';
+
+        res.json({ message: "Order paid successfully and table set to 'ວ່າງ'.", order: updatedOrder });
 
     } catch (error) {
         console.error("Error checking out order:", error);
         if (error.code === 'P2025') {
-            return res.status(404).json({ message: "Order not found." });
+            return res.status(404).json({ message: "Order or related record not found during update." });
         }
         res.status(500).json({ message: "Server Error during checkout", error: error.message });
     }

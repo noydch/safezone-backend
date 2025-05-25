@@ -1,11 +1,11 @@
 const express = require('express')
 const cors = require('cors')
-const { 
-    createReservation, 
-    getAllReservations, 
-    getReservationById, 
-    updateReservationStatus, 
-    deleteReservation 
+const {
+    createReservation,
+    getAllReservations,
+    getReservationById,
+    updateReservationStatus,
+    deleteReservation
 } = require('../controller/reservation')
 
 const router = express.Router()

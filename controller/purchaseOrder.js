@@ -28,7 +28,7 @@ exports.createPurchaseOrder = async (req, res) => {
         // Create Purchase Order and Details in a transaction
         const newPurchaseOrder = await prisma.$transaction(async (tx) => {
             // 1. Create the main Purchase Order
-            const purchaseOrder = await tx.purchaseOrder.create({
+            const purchaseOrder = await prisma.purchaseOrder.create({
                 data: {
                     supplierId: Number(supplierId),
                     totalPrice: totalPrice,
@@ -68,7 +68,7 @@ exports.createPurchaseOrder = async (req, res) => {
 
     } catch (error) {
         console.error("Error creating purchase order:", error);
-         // Handle foreign key constraint errors (e.g., invalid drinkId)
+        // Handle foreign key constraint errors (e.g., invalid drinkId)
         if (error.code === 'P2003' && error.meta?.field_name?.includes('drinkId')) {
             return res.status(400).json({ message: "Invalid drinkId provided in details." });
         }
@@ -140,22 +140,87 @@ exports.updatePurchaseOrderStatus = async (req, res) => {
             return res.status(400).json({ message: `Invalid status. Allowed: ${allowedStatuses.join(', ')}` });
         }
 
-        const updatedPurchaseOrder = await prisma.purchaseOrder.update({
-            where: { id: Number(id) },
-            data: { status: status },
-             include: { // Optionally return details after update
-                // supplier: true,
-                details: {
-                    include: {
-                        drink: true
+        let updatedPurchaseOrder;
+
+        // 👇 ตรวจสอบว่าสถานะใหม่คือ 'approved' หรือไม่
+        if (status === 'approved') {
+            // 🚀 ใช้ Transaction เพื่ออัปเดตสถานะและจำนวนสินค้าใน Drink table
+            updatedPurchaseOrder = await prisma.$transaction(async (tx) => {
+                // 1. ค้นหา Purchase Order พร้อมรายละเอียด
+                const purchaseOrder = await tx.purchaseOrder.findUnique({
+                    where: { id: Number(id) },
+                    include: { details: true } // ต้องมี details เพื่อรู้ว่าต้องอัปเดต drink ตัวไหนบ้าง
+                });
+
+                // 1.1 ตรวจสอบว่ามี Purchase Order หรือไม่
+                if (!purchaseOrder) {
+                    throw new Error('P2025'); // โยน Error รหัส P2025 (Record not found)
+                }
+
+                // 1.2 (สำคัญ) ตรวจสอบว่าสถานะปัจจุบันยังไม่ใช่ 'approved'
+                // เพื่อป้องกันการเพิ่มจำนวนซ้ำซ้อนหากมีการเรียก API นี้ซ้ำ
+                if (purchaseOrder.status === 'approved') {
+                    console.warn(`Purchase order ${id} is already approved. No stock update performed.`);
+                    // คืนค่า PO เดิมไปเลย เพราะไม่ต้องทำอะไรเพิ่ม
+                    return tx.purchaseOrder.findUnique({
+                        where: { id: Number(id) },
+                        include: { details: { include: { drink: true } } }
+                    });
+                }
+
+                // 2. อัปเดตสถานะของ Purchase Order
+                const updatedPO = await tx.purchaseOrder.update({
+                    where: { id: Number(id) },
+                    data: { status: status },
+                    include: { // คืนค่าพร้อม details และ drink เพื่อให้ response สมบูรณ์
+                        details: {
+                            include: {
+                                drink: true
+                            }
+                        }
+                    }
+                });
+
+                // 3. สร้าง array ของ Promises สำหรับอัปเดตจำนวน (quantity) ในตาราง Drink
+                const drinkUpdates = purchaseOrder.details.map(detail => {
+                    return tx.drink.update({
+                        where: { id: detail.drinkId },
+                        data: {
+                            qty: {
+                                increment: detail.quantity
+                            }
+                        }
+                    });
+                });
+                console.log(quantity);
+
+                // 4. รอให้การอัปเดต Drink ทั้งหมดเสร็จสิ้น
+                await Promise.all(drinkUpdates);
+
+                // 5. คืนค่า Purchase Order ที่อัปเดตแล้ว
+                return updatedPO;
+            });
+
+        } else {
+            // 🚫 หากสถานะไม่ใช่ 'approved' (เช่น 'cancelled' หรือ 'pending')
+            // ก็ให้อัปเดตเฉพาะสถานะของ Purchase Order อย่างเดียว
+            updatedPurchaseOrder = await prisma.purchaseOrder.update({
+                where: { id: Number(id) },
+                data: { status: status },
+                include: {
+                    details: {
+                        include: {
+                            drink: true
+                        }
                     }
                 }
-            }
-        });
+            });
+        }
 
         res.json(updatedPurchaseOrder);
+
     } catch (error) {
-        if (error.code === 'P2025') { // Record not found
+        if (error.code === 'P2025' || error.message === 'P2025') { // Record not found
             return res.status(404).json({ message: "Purchase Order not found" });
         }
         console.error("Error updating purchase order status:", error);
@@ -179,7 +244,7 @@ exports.deletePurchaseOrder = async (req, res) => {
             // Use findUnique first to ensure it exists and throw specific error if not
             const po = await tx.purchaseOrder.findUnique({ where: { id: Number(id) } });
             if (!po) {
-                 throw new Error('P2025'); // Simulate Prisma's not found error code
+                throw new Error('P2025'); // Simulate Prisma's not found error code
             }
             await tx.purchaseOrder.delete({
                 where: { id: Number(id) }
@@ -188,7 +253,7 @@ exports.deletePurchaseOrder = async (req, res) => {
 
         res.json({ message: "Purchase Order deleted successfully" });
     } catch (error) {
-         if (error.message === 'P2025' || error.code === 'P2025') { // Record not found
+        if (error.message === 'P2025' || error.code === 'P2025') { // Record not found
             return res.status(404).json({ message: "Purchase Order not found" });
         }
         console.error("Error deleting purchase order:", error);

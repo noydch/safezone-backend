@@ -12,6 +12,7 @@ cloudinary.config({
 exports.createFood = async (req, res) => {
     try {
         const { name, categoryId, price, qty } = req.body;
+        console.log(categoryId);
 
         if (!req.file) {
             return res.status(400).json({ error: "Image file is required" });
