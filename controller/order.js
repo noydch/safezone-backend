@@ -153,17 +153,27 @@ exports.checkoutOrder = async (req, res) => {
             return res.status(400).json({ message: "Invalid Order ID." });
         }
 
-        // ตรวจสอบ PaymentMethod (ปรับปรุงให้รองรับ Enum หรือ String)
-        const allowedPaymentMethods = Object.values(PaymentMethod);
+        // Validate payment method
+        const allowedPaymentMethods = Object.values(PaymentMethod || {});
         if (!paymentMethod || !allowedPaymentMethods.includes(paymentMethod)) {
             return res.status(400).json({
                 message: "Invalid or missing payment method. Must be one of: " + allowedPaymentMethods.join(', ')
             });
         }
 
-        // --- ⬇️ ค้นหา Order และตรวจสอบสถานะ (ก่อน Transaction) ⬇️ ---
+        // Fetch order with details for stock deduction
         const currentOrder = await prisma.order.findUnique({
-            where: { id: parsedOrderId }
+            where: { id: parsedOrderId },
+            include: {
+                table: true,
+                orderRounds: {
+                    include: {
+                        orderDetails: {
+                            include: { drink: true }
+                        }
+                    }
+                }
+            }
         });
 
         if (!currentOrder) {
@@ -174,25 +184,22 @@ exports.checkoutOrder = async (req, res) => {
             return res.status(400).json({ message: `Order is not OPEN. Current status: ${currentOrder.billStatus}` });
         }
 
-        // ตรวจสอบว่า Order มี Table ID หรือไม่
         if (!currentOrder.tableId) {
             return res.status(500).json({ message: "Internal Error: Order is not associated with a table." });
         }
-        // --- ⬆️ สิ้นสุดการค้นหาและตรวจสอบ ⬆️ ---
 
-
-        // --- ⬇️ เริ่ม Transaction ⬇️ ---
+        // Start transaction
         const updatedOrder = await prisma.$transaction(async (tx) => {
-            // 1. อัปเดตสถานะ Order เป็น PAID
+            // 1. Update order status to PAID
             const order = await tx.order.update({
                 where: { id: parsedOrderId },
                 data: {
                     billStatus: BillStatus.PAID,
                     payment_method: paymentMethod,
                 },
-                include: { // Include ข้อมูลสำหรับ Response
+                include: { // Include data for a complete response
                     employee: true,
-                    table: true, // จะยังเห็นสถานะโต๊ะเป็น 'ຖືກຈອງແລ້ວ' ในขั้นนี้
+                    table: true,
                     orderRounds: {
                         include: {
                             orderDetails: { include: { food: true, drink: true } }
@@ -202,30 +209,55 @@ exports.checkoutOrder = async (req, res) => {
                 }
             });
 
-            // 2. อัปเดตสถานะโต๊ะกลับเป็น 'ວ່າງ'
-            await tx.table.update({
-                where: { id: currentOrder.tableId }, // ใช้ tableId จาก Order ที่หาเจอ
-                data: { status: 'ວ່າງ' } // ⬅️ เปลี่ยนสถานะโต๊ะเป็น 'ว่าง'
-            });
+            // 2. Update table status to 'ວ່າງ' (available)
+            if (currentOrder.tableId) {
+                await tx.table.update({
+                    where: { id: currentOrder.tableId },
+                    data: { status: 'ວ່າງ' }
+                });
+            }
 
-            return order; // ส่งคืน Order ที่อัปเดตแล้ว
+            // 3. Deduct drink stock
+            for (const round of currentOrder.orderRounds || []) {
+                for (const detail of round.orderDetails || []) {
+                    if (detail.drinkId && detail.quantity > 0) {
+                        // Optional: Check stock before decrementing to prevent negative stock
+                        // const drinkItem = await tx.drink.findUnique({ where: { id: detail.drinkId }, select: { qty: true } });
+                        // if (!drinkItem || drinkItem.qty === null || drinkItem.qty < detail.quantity) {
+                        //     throw new Error(`Not enough stock for drink ID ${detail.drinkId}.`);
+                        // }
+
+                        await tx.drink.update({
+                            where: { id: detail.drinkId },
+                            data: {
+                                qty: {
+                                    decrement: detail.quantity
+                                }
+                            }
+                        });
+                    }
+                }
+            }
+            return order;
         });
-        // --- ⬆️ สิ้นสุด Transaction ⬆️ ---
 
-        // (ทางเลือก) ถ้าอยากให้ 'table' ใน response เป็นสถานะ 'ວ່າງ' ทันที
-        // updatedOrder.table.status = 'ວ່າງ';
-
-        res.json({ message: "Order paid successfully and table set to 'ວ່າງ'.", order: updatedOrder });
+        res.json({
+            message: "Order paid successfully, table status updated, and drink stock adjusted.",
+            order: updatedOrder
+        });
 
     } catch (error) {
         console.error("Error checking out order:", error);
-        if (error.code === 'P2025') {
-            return res.status(404).json({ message: "Order or related record not found during update." });
+        if (error.code === 'P2025') { // Prisma: Record to update not found
+            return res.status(404).json({ message: "Order, table, or a drink in the order not found." });
+        }
+        // Handle specific errors like stock going negative if you added checks
+        if (error.message.startsWith("Not enough stock")) {
+            return res.status(409).json({ message: error.message });
         }
         res.status(500).json({ message: "Server Error during checkout", error: error.message });
     }
 };
-
 // =================================================================
 // 3. ยกเลิกออเดอร์ (Logic คล้ายเดิม แต่แก้ include)
 // =================================================================
@@ -349,12 +381,21 @@ exports.updateRoundKitchenStatus = async (req, res) => {
 exports.getAllOrders = async (req, res) => {
     try {
         const orders = await prisma.order.findMany({
-            include: { // <-- แก้ไข include
+            include: {
                 employee: true,
                 table: true,
                 orderRounds: {
                     include: {
-                        orderDetails: { include: { food: true, drink: true } }
+                        orderDetails: {
+                            include: {
+                                food: {
+                                    include: { category: true } // ກວດສອບຊື່ນີ້ໃນ schema ຂອງທ່ານນຳ
+                                },
+                                drink: {
+                                    include: { Category: true } //  <-- ❗️ ແກ້ໄຂແລ້ວ: ປ່ຽນເປັນໂຕ C ໃຫຍ່ ❗️
+                                }
+                            }
+                        }
                     },
                     orderBy: { roundNumber: 'asc' }
                 },

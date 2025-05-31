@@ -32,6 +32,14 @@ exports.delTable = async (req, res) => {
         })
     } catch (error) {
         console.log(error);
+        if (error.code === 'P2003') {
+            return res.status(400).json({
+                message: 'Cannot delete table because it is referenced by other records'
+            });
+        }
+        res.status(500).json({
+            message: 'Server Error'
+        });
     }
 }
 

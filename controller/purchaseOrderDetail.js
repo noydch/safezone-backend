@@ -55,7 +55,7 @@ async function updatePurchaseOrderTotal(tx, poId) {
         where: { id: Number(poId) },
         data: { totalPrice: newTotalPrice }
     });
-     return newTotalPrice; // Return the new total for potential use
+    return newTotalPrice; // Return the new total for potential use
 }
 
 // 📌 UPDATE PURCHASE ORDER DETAIL
@@ -67,10 +67,10 @@ exports.updatePurchaseOrderDetail = async (req, res) => {
         return res.status(400).json({ message: "Quantity or price must be provided for update." });
     }
     if (quantity !== undefined && (isNaN(Number(quantity)) || Number(quantity) <= 0)) {
-         return res.status(400).json({ message: "Invalid quantity provided. Must be a positive number." });
+        return res.status(400).json({ message: "Invalid quantity provided. Must be a positive number." });
     }
-     if (price !== undefined && (isNaN(Number(price)) || Number(price) < 0)) {
-         return res.status(400).json({ message: "Invalid price provided. Must be a non-negative number." });
+    if (price !== undefined && (isNaN(Number(price)) || Number(price) < 0)) {
+        return res.status(400).json({ message: "Invalid price provided. Must be a non-negative number." });
     }
 
     try {
@@ -93,7 +93,7 @@ exports.updatePurchaseOrderDetail = async (req, res) => {
                     quantity: quantity !== undefined ? Number(quantity) : undefined,
                     price: price !== undefined ? Number(price) : undefined
                 },
-                 include: { drink: true } // Return updated detail with drink info
+                include: { drink: true } // Return updated detail with drink info
             });
 
             // 3. Recalculate and update the parent PurchaseOrder's total price
@@ -125,7 +125,7 @@ exports.deletePurchaseOrderDetail = async (req, res) => {
             });
 
             if (!detail) {
-                 throw new Error('P2025'); // Simulate Prisma not found error
+                throw new Error('P2025'); // Simulate Prisma not found error
             }
             const poId = detail.poId;
 
@@ -135,7 +135,7 @@ exports.deletePurchaseOrderDetail = async (req, res) => {
             });
 
             // 3. Recalculate and update the parent PurchaseOrder's total price
-             await updatePurchaseOrderTotal(tx, poId);
+            await updatePurchaseOrderTotal(tx, poId);
         });
 
         res.json({ message: "Purchase Order Detail deleted successfully" });
@@ -166,11 +166,11 @@ exports.getAllPurchaseOrderDetailsByPurchaseOrderId = async (req, res) => {
         // Optional: Check if the Purchase Order itself exists if needed
         if (details.length === 0) {
             const purchaseOrderExists = await prisma.purchaseOrder.findUnique({
-                 where: { id: Number(purchaseOrderId) },
-                 select: { id: true }
+                where: { id: Number(purchaseOrderId) },
+                select: { id: true }
             });
             if (!purchaseOrderExists) {
-                 return res.status(404).json({ message: `Purchase Order with ID ${purchaseOrderId} not found.` });
+                return res.status(404).json({ message: `Purchase Order with ID ${purchaseOrderId} not found.` });
             }
             // If PO exists but has no details, return empty array
         }
@@ -181,4 +181,3 @@ exports.getAllPurchaseOrderDetailsByPurchaseOrderId = async (req, res) => {
         res.status(500).json({ message: "Server Error fetching purchase order details by Purchase Order ID" });
     }
 };
- 

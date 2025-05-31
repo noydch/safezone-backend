@@ -193,7 +193,7 @@ model Order {
   id             Int            @id @default(autoincrement())
   employee       Employee       @relation(fields: [empId], references: [id])
   empId          Int
-  table          Table          @relation(fields: [tableId], references: [id])
+  table          Table          @relation(fields: [tableId], references: [id], onDelete: Cascade)
   tableId        Int
   orderDate      DateTime       @default(now())
   total_price    Float

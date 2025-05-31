@@ -9,7 +9,8 @@ const { readdirSync } = require('fs')
 // CORS configuration
 app.use(cors({
     origin: [
-        'http://localhost:5173',  // สำหรับ development
+        'http://localhost:5173',      // สำหรับ development (Frontend 1)
+        'http://localhost:5174',      // สำหรับ development (Frontend 2 - ທີ່ເພີ່ມໃໝ່)
         'https://mysafezone.netlify.app'  // สำหรับ production
     ],
     credentials: true,
