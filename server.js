@@ -11,7 +11,8 @@ app.use(cors({
     origin: [
         'http://localhost:5173',      // สำหรับ development (Frontend 1)
         'http://localhost:5174',      // สำหรับ development (Frontend 2 - ທີ່ເພີ່ມໃໝ່)
-        'https://mysafezone.netlify.app'  // สำหรับ production
+        'https://mysafezone.netlify.app',  // สำหรับ production
+        'https://mysafezone-mb.netlify.app'  // สำหรับ production
     ],
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
