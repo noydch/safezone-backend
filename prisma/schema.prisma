@@ -72,6 +72,55 @@ model Category {
   @@map("categories")
 }
 
+// --- ส่วนจัดการสต็อกเครื่องดื่ม ---
+
+// 1. หน่วยพื้นฐานทางกายภาพ (เล็กที่สุด)
+model Unit {
+  id        Int       @id @default(autoincrement())
+  name      String    @unique // หน่วยพื้นฐาน: ขวด, กระป๋อง, แก้ว
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  drinks    Drink[]
+
+  @@map("units")
+}
+
+// 2. หน่วยขาย/หน่วยจัดซื้อ (แพ็กเกจ)
+model ProductUnit {
+  id              Int                   @id @default(autoincrement())
+  name            String                // ชื่อหน่วย เช่น "ลัง 12 ขวด", "แพ็ค 6 กระป๋อง", "ขวดเดี่ยว"
+  price           Float                 // ราคาขายสำหรับหน่วยนี้ (เช่น ราคาต่อลัง, ราคาต่อขวด)
+  drinkId         Int                   // เชื่อมกับเครื่องดื่มหลัก
+  drink           Drink                 @relation(fields: [drinkId], references: [id], onDelete: Cascade)
+  baseItemsCount  Int                   // จำนวนหน่วยย่อยในแพ็กเกจนี้ (เช่น 12, 6, 1)
+  createdAt       DateTime              @default(now())
+  updatedAt       DateTime              @updatedAt
+  purchaseDetails PurchaseOrderDetail[]
+  orderDetails    OrderDetail[]
+
+  @@map("product_units")
+}
+
+// 3. สินค้าเครื่องดื่ม (สต็อกนับเป็นหน่วยพื้นฐาน)
+model Drink {
+  id           Int            @id @default(autoincrement())
+  name         String         // เช่น "เบียร์สิงห์", "โค้ก"
+  qty          Int            @default(0) // สต็อกในหน่วยย่อยที่สุดเสมอ (จำนวนขวด/กระป๋อง ทั้งหมด)
+  imageUrl     String
+  baseUnitId   Int            // FK ไปยัง Unit เพื่อบอกหน่วยพื้นฐาน
+  baseUnit     Unit           @relation(fields: [baseUnitId], references: [id])
+  categoryId   Int?
+  Category     Category?      @relation(fields: [categoryId], references: [id])
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+  productUnits ProductUnit[]  // 1 เครื่องดื่ม สามารถมีได้หลายหน่วยขาย
+  importDetails ImportDetail[]
+
+  @@map("drinks")
+}
+
+// --- สิ้นสุดส่วนจัดการสต็อกเครื่องดื่ม ---
+
 model Food {
   id           Int           @id @default(autoincrement())
   name         String
@@ -84,23 +133,6 @@ model Food {
   orderDetails OrderDetail[]
 
   @@map("foods")
-}
-
-model Drink {
-  id              Int                   @id @default(autoincrement())
-  name            String
-  qty             Int?
-  price           Float // <-- เปลี่ยนเป็น Float
-  imageUrl        String
-  createdAt       DateTime              @default(now())
-  updatedAt       DateTime              @updatedAt
-  purchaseDetails PurchaseOrderDetail[]
-  importDetails   ImportDetail[]
-  Category        Category?             @relation(fields: [categoryId], references: [id])
-  categoryId      Int?
-  OrderDetail     OrderDetail[]
-
-  @@map("drinks")
 }
 
 model Supplier {
@@ -117,15 +149,17 @@ model Supplier {
   @@map("suppliers")
 }
 
+// --- ส่วนการจัดซื้อและนำเข้า ---
+
 model PurchaseOrder {
-  id            Int                   @id @default(autoincrement())
-  supplier      Supplier              @relation(fields: [supplierId], references: [id])
+  id            Int                     @id @default(autoincrement())
+  supplier      Supplier                @relation(fields: [supplierId], references: [id])
   supplierId    Int
-  orderDate     DateTime              @default(now())
+  orderDate     DateTime                @default(now())
   totalPrice    Float
-  status        String                @default("pending") // pending, approved, cancelled
-  createdAt     DateTime              @default(now())
-  updatedAt     DateTime              @updatedAt
+  status        String                  @default("pending") // pending, approved, cancelled
+  createdAt     DateTime                @default(now())
+  updatedAt     DateTime                @updatedAt
   details       PurchaseOrderDetail[]
   ImportReceipt ImportReceipt[]
 
@@ -136,10 +170,10 @@ model PurchaseOrderDetail {
   id            Int           @id @default(autoincrement())
   purchaseOrder PurchaseOrder @relation(fields: [poId], references: [id], onDelete: Cascade)
   poId          Int
-  drink         Drink         @relation(fields: [drinkId], references: [id])
-  drinkId       Int
-  quantity      Int
-  price         Float
+  productUnitId Int           // สั่งซื้อเป็นหน่วย ProductUnit (ลัง, แพ็ค)
+  productUnit   ProductUnit   @relation(fields: [productUnitId], references: [id])
+  quantity      Int           // จำนวนของ ProductUnit ที่สั่ง (เช่น 2 ลัง)
+  price         Float         // ราคาต่อหน่วยที่สั่งซื้อ (ราคาต่อลัง)
   createdAt     DateTime      @default(now())
 
   @@map("purchase_order_details")
@@ -167,78 +201,73 @@ model ImportDetail {
   importId      Int
   drink         Drink         @relation(fields: [drinkId], references: [id])
   drinkId       Int
-  quantity      Int
+  quantity      Int           // จำนวนหน่วยพื้นฐานที่นำเข้า
   price         Float
   createdAt     DateTime      @default(now())
 
   @@map("import_details")
 }
 
+// --- ส่วนจัดการโต๊ะและออเดอร์ ---
+
 model Table {
-  id           Int           @id @default(autoincrement())
-  table_number Int // <-- คงเป็น Int ตามเดิม
-  status       String        @default("ວ່າງ")
-  seat         Int
-  createdAt    DateTime      @default(now())
-  updatedAt    DateTime      @updatedAt
-  Reservation  Reservation[]
-  Order        Order[]
+  id            Int           @id @default(autoincrement())
+  table_number  Int
+  status        String        @default("ວ່າງ")
+  seat          Int
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+  Reservation   Reservation[]
+  Order         Order[]
 
   @@map("tables")
 }
 
-// === ส่วนของ Order ที่แก้ไขแล้ว ===
-
 model Order {
-  id             Int            @id @default(autoincrement())
-  employee       Employee       @relation(fields: [empId], references: [id])
+  id             Int           @id @default(autoincrement())
+  employee       Employee      @relation(fields: [empId], references: [id])
   empId          Int
-  table          Table          @relation(fields: [tableId], references: [id], onDelete: Cascade)
+  table          Table         @relation(fields: [tableId], references: [id], onDelete: Cascade)
   tableId        Int
-  orderDate      DateTime       @default(now())
+  orderDate      DateTime      @default(now())
   total_price    Float
-  // kitchenStatus KitchenStatus   @default(PENDING) // <-- เอาออก
-  billStatus     BillStatus     @default(OPEN)
+  billStatus     BillStatus    @default(OPEN)
   payment_method PaymentMethod?
-  createdAt      DateTime       @default(now())
-  updatedAt      DateTime       @updatedAt // <-- เปลี่ยนเป็น @updatedAt
-  orderRounds    OrderRound[] // <-- เพิ่ม: เชื่อมไปยัง OrderRound
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+  orderRounds    OrderRound[]
 
   @@map("orders")
 }
 
-// +++ ตาราง OrderRound ที่เพิ่มเข้ามาใหม่ +++
 model OrderRound {
   id            Int           @id @default(autoincrement())
-  orderId       Int // FK ไปยัง Order หลัก
-  roundNumber   Int // ลำดับรอบ (1, 2, 3...)
-  kitchenStatus KitchenStatus @default(PENDING) // <-- สถานะครัวอยู่ที่นี่
+  orderId       Int
+  roundNumber   Int
+  kitchenStatus KitchenStatus @default(PENDING)
   createdAt     DateTime      @default(now())
-
-  order        Order         @relation(fields: [orderId], references: [id], onDelete: Cascade) // ถ้า Order หลักถูกลบ รอบก็จะถูกลบด้วย
-  orderDetails OrderDetail[] // 1 รอบ มีหลาย OrderDetail
+  order         Order         @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  orderDetails  OrderDetail[]
 
   @@map("order_rounds")
 }
 
 model OrderDetail {
-  id           Int        @id @default(autoincrement())
-  // order     Order      @relation(fields: [ord_id], references: [id], onDelete: Cascade)
-  // ord_id    Int        // <-- เอาออก
-  orderRound   OrderRound @relation(fields: [orderRoundId], references: [id], onDelete: Cascade) // <-- เพิ่ม: เชื่อมไปยัง OrderRound
-  orderRoundId Int // <-- เพิ่ม
-  food         Food?      @relation(fields: [foodId], references: [id])
-  foodId       Int?
-  drink        Drink?     @relation(fields: [drinkId], references: [id])
-  drinkId      Int?
-  quantity     Int
-  price        Float
-  createdAt    DateTime   @default(now())
+  id            Int          @id @default(autoincrement())
+  orderRound    OrderRound   @relation(fields: [orderRoundId], references: [id], onDelete: Cascade)
+  orderRoundId  Int
+  food          Food?        @relation(fields: [foodId], references: [id])
+  foodId        Int?
+  productUnitId Int?         // ขายเครื่องดื่มเป็นหน่วย ProductUnit
+  productUnit   ProductUnit? @relation(fields: [productUnitId], references: [id])
+  quantity      Int
+  price         Float        // ราคา ณ ตอนที่ขาย
+  createdAt     DateTime     @default(now())
 
   @@map("order_details")
 }
 
-// === ส่วนของ Customer และ Reservation (คงเดิม) ===
+// --- ส่วนลูกค้าและการจอง ---
 
 model Customer {
   id          Int           @id @default(autoincrement())
@@ -259,7 +288,7 @@ model Reservation {
   table           Table    @relation(fields: [tableId], references: [id])
   tableId         Int
   reservationTime DateTime
-  status          String   @default("pending")
+  status          String   @default("pending") // pending, confirmed, cancelled
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 

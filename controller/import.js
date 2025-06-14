@@ -1,104 +1,119 @@
 const prisma = require("../config/prisma");
 
+// Controller สำหรับการยืนยันใบสั่งซื้อ และรับสินค้าเข้าสต็อก
 exports.confirmPurchaseOrder = async (req, res) => {
     try {
         const { id } = req.params;
-        console.log("Confirming PO ID:", id); // Log ID ที่ได้รับ
 
         const importReceiptResult = await prisma.$transaction(async (tx) => {
 
-            // 1. ค้นหา Purchase Order พร้อมรายละเอียด และตรวจสอบ
+            // --- 1. แก้ไข: ดึงข้อมูล PO พร้อมรายละเอียดเชิงลึก ---
+            // เราต้อง include ไปถึง productUnit เพื่อเอา drinkId และ baseItemsCount มาใช้
             const purchaseOrder = await tx.purchaseOrder.findUnique({
                 where: { id: Number(id) },
-                include: { details: true },
+                include: {
+                    details: {
+                        include: {
+                            productUnit: {
+                                select: {
+                                    id: true,
+                                    drinkId: true,        // ID ของเครื่องดื่มหลัก
+                                    baseItemsCount: true, // จำนวนหน่วยย่อยต่อแพ็กเกจ
+                                }
+                            }
+                        }
+                    }
+                },
             });
 
+            // --- 2. ตรวจสอบเงื่อนไขต่างๆ ---
             if (!purchaseOrder) {
-                console.error("PO NOT FOUND:", id);
                 throw new Error('PO_NOT_FOUND');
             }
-
             if (purchaseOrder.status === 'approved') {
-                console.warn("PO ALREADY APPROVED:", id);
                 throw new Error('PO_ALREADY_APPROVED');
             }
-
             if (!purchaseOrder.details || purchaseOrder.details.length === 0) {
-                console.error("PO HAS NO DETAILS:", id);
                 throw new Error('PO_HAS_NO_DETAILS');
             }
 
-            console.log("PO Found:", purchaseOrder.id, "Status:", purchaseOrder.status);
-
-            // 2. อัปเดตสถานะ PO เป็น "approved"
+            // --- 3. อัปเดตสถานะ PO เป็น "approved" ---
             await tx.purchaseOrder.update({
                 where: { id: Number(id) },
                 data: { status: 'approved' }
             });
-            console.log("PO Status Updated to approved");
 
-            // 3. สร้าง ImportReceipt
+            // --- 4. สร้างใบรับสินค้า (ImportReceipt) ---
             const newImportReceipt = await tx.importReceipt.create({
                 data: {
                     supplierId: purchaseOrder.supplierId,
                     importDate: new Date(),
                     totalPrice: purchaseOrder.totalPrice,
                     purchaseOrderId: purchaseOrder.id,
-                    status: 'completed'
+                    status: 'completed' // หรือ 'approved' ตามที่คุณกำหนด
                 }
             });
-            console.log("ImportReceipt Created:", newImportReceipt.id);
 
-            // 4. สร้าง ImportDetail และเตรียมอัปเดต Drink Qty
+            // --- 5. สร้าง ImportDetail และเตรียมอัปเดตสต็อก ---
             const allOperations = [];
+            for (const item of purchaseOrder.details) {
+                // ตรวจสอบว่ามีข้อมูล productUnit ครบถ้วน
+                if (!item.productUnit || !item.productUnit.drinkId || item.productUnit.baseItemsCount === undefined) {
+                    throw new Error(`Incomplete product unit data for detail ID: ${item.id}`);
+                }
 
-            purchaseOrder.details.forEach(item => {
-                console.log(`Processing item: Drink ID ${item.drinkId}, Qty ${item.quantity}`);
+                // --- 5.1 แก้ไข: คำนวณจำนวนสต็อกหน่วยย่อยที่จะเพิ่ม ---
+                const quantityInBaseUnits = item.quantity * item.productUnit.baseItemsCount;
 
-                // 4.1 เพิ่ม Promise สำหรับสร้าง ImportDetail
+                // --- 5.2 แก้ไข: สร้าง ImportDetail โดยใช้ข้อมูลที่ถูกต้อง ---
                 allOperations.push(tx.importDetail.create({
                     data: {
                         importId: newImportReceipt.id,
-                        drinkId: Number(item.drinkId),
-                        quantity: Number(item.quantity),
-                        price: Number(item.price)
+                        drinkId: item.productUnit.drinkId, // <-- ใช้ drinkId จาก productUnit
+                        quantity: quantityInBaseUnits,    // <-- ใช้จำนวนที่คำนวณแล้ว
+                        price: item.price                 // <-- ราคาทุนต่อหน่วยที่ซื้อ
                     }
                 }));
 
-                // 4.2 --- (แก้ไขตรงนี้) ---
-                // ใช้ $executeRaw เพื่ออัปเดตอย่างปลอดภัย และจัดการกับ null ด้วย COALESCE
-                // !!สำคัญ!!: แก้ "drinks" ให้เป็นชื่อตารางจริงของคุณในฐานข้อมูล (ถ้าไม่ใช่ drinks)
-                allOperations.push(tx.$executeRaw`
-                    UPDATE drinks 
-                    SET qty = COALESCE(qty, 0) + ${Number(item.quantity)} 
-                    WHERE id = ${Number(item.drinkId)}
-                `);
-                // --- จบส่วนแก้ไข ---
-            });
+                // --- 5.3 แก้ไข: เพิ่มสต็อกในตาราง Drink ด้วย ORM ที่ปลอดภัยกว่า ---
+                allOperations.push(tx.drink.update({
+                    where: { id: item.productUnit.drinkId }, // <-- อ้างอิง drinkId ที่ถูกต้อง
+                    data: {
+                        qty: {
+                            increment: quantityInBaseUnits // <-- เพิ่มสต็อกตามจำนวนที่คำนวณ
+                        }
+                    }
+                }));
+            }
 
+            // 6. รอให้ทุก Operation (สร้าง detail + อัปเดตสต็อก) เสร็จสิ้นพร้อมกัน
+            await Promise.all(allOperations);
 
-            console.log(`Prepared ${allOperations.length} operations for Promise.all.`);
-
-            // 5. รอให้ *ทุก* Operation เสร็จสิ้น
-            await Promise.all(allOperations); // <--- รอทุกอย่างที่อยู่ใน Array
-
-            console.log("All operations completed successfully.");
-
-            // 6. คืนค่า ImportReceipt ที่สร้างเสร็จพร้อมรายละเอียด
+            // 7. คืนค่า ImportReceipt ที่สร้างเสร็จพร้อมรายละเอียดทั้งหมด
             return tx.importReceipt.findUnique({
                 where: { id: newImportReceipt.id },
-                include: { details: { include: { drink: true } } }
+                include: {
+                    details: {
+                        include: {
+                            drink: true
+                        }
+                    },
+                    supplier: true,
+                    purchaseOrder: true
+                }
             });
         });
 
-        // 7. ส่ง response กลับเมื่อทุกอย่างสำเร็จ
+        // 8. ส่ง response กลับเมื่อทุกอย่างสำเร็จ
         res.status(200).json({
             message: "Purchase Order confirmed and imported successfully.",
             importReceipt: importReceiptResult
         });
 
     } catch (error) {
-        console.error("Transaction failed! Error confirming purchase order:", error); // Log error ที่เกิดขึ้น
+        console.error("Transaction failed! Error confirming purchase order:", error);
+
+        // จัดการ Error case ต่างๆ
         if (error.message === 'PO_NOT_FOUND') {
             return res.status(404).json({ message: "Purchase Order not found." });
         }
@@ -112,25 +127,16 @@ exports.confirmPurchaseOrder = async (req, res) => {
     }
 };
 
-
 exports.getImportDetail = async (req, res) => {
     try {
         const { id } = req.params;
-
         const importDetail = await prisma.importReceipt.findUnique({
-            where: {
-                id: Number(id),
-            },
+            where: { id: Number(id) },
             include: {
-                purchaseOrder: {
-                    include: {
-                        supplier: true,
-                        details: {
-                            include: {
-                                drink: true
-                            }
-                        }
-                    }
+                supplier: true,
+                purchaseOrder: true,
+                details: {
+                    include: { drink: true }
                 }
             }
         });
@@ -138,7 +144,6 @@ exports.getImportDetail = async (req, res) => {
         if (!importDetail) {
             return res.status(404).json({ message: 'Import Receipt not found.' });
         }
-
         res.status(200).json(importDetail);
     } catch (error) {
         console.error('Error fetching import detail:', error);
@@ -151,19 +156,15 @@ exports.getAllImportReceipts = async (req, res) => {
         const receipts = await prisma.importReceipt.findMany({
             orderBy: { importDate: 'desc' },
             include: {
+                supplier: true,
                 purchaseOrder: {
-                    include: {
-                        supplier: true,
-                        details: {
-                            include: {
-                                drink: true
-                            }
-                        }
-                    }
+                    select: { id: true, orderDate: true }
+                },
+                details: {
+                    include: { drink: true }
                 }
             }
         });
-
         res.status(200).json(receipts);
     } catch (error) {
         console.error('Error fetching import receipts:', error);
