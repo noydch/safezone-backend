@@ -1,24 +1,51 @@
 const prisma = require('../config/prisma');
 
-
 // 📌 CREATE RESERVATION (ปรับปรุงให้เปลี่ยนสถานะโต๊ะ)
 exports.createReservation = async (req, res) => {
     try {
         const { customerId, tableId, reservationTime } = req.body;
+        console.log("Request Body received for createReservation:", req.body); // Log full request body
 
         if (!customerId || !tableId || !reservationTime) {
             return res.status(400).json({ message: "Customer ID, Table ID, and Reservation Time are required." });
         }
 
-        const reservationDate = new Date(reservationTime);
-        const reservationHour = reservationDate.getHours();
+        // --- Debugging incoming time ---
+        console.log("Incoming reservationTime string (from frontend):", reservationTime);
+        const reservationDate = new Date(reservationTime); // Parse ISO string into Date object (this is UTC)
+        console.log("Parsed reservationDate object (on backend, in server's local time):", reservationDate);
 
-        // 🕒 ตรวจสอบว่าเวลาจองเลย 20:00 น. หรือไม่
-        if (reservationHour >= 20) {
-            return res.status(400).json({ message: "ບໍ່ສາມາດຈອງໂຕະເວລາ 20:00 ນ. ຫຼື ຫຼັງຈາກນັ້ນໄດ້." });
+        // --- Logic: Prevent bookings for today at or after 20:00 (8 PM local time) ---
+        const now = new Date(); // Current date and time on the server (local timezone: GMT+7 in Thailand)
+
+        // Extract components for comparison in the server's local timezone
+        const currentYear = now.getFullYear();
+        const currentMonth = now.getMonth();
+        const currentDay = now.getDate();
+
+        const reservationYear = reservationDate.getFullYear();
+        const reservationMonth = reservationDate.getMonth();
+        const reservationDay = reservationDate.getDate();
+        const reservationHour = reservationDate.getHours(); // Hour in server's local time
+
+        // Check if the reservation date is today
+        const isReservationToday = (
+            reservationYear === currentYear &&
+            reservationMonth === currentMonth &&
+            reservationDay === currentDay
+        );
+
+        // If it's today AND the reservation hour is 8 PM (20:00) or later, reject the booking.
+        if (isReservationToday && reservationHour >= 20) {
+            console.log(`Attempted booking for today (${reservationDate.toLocaleDateString()}) at ${reservationHour}:00 (local time) which is >= 20:00. Rejecting.`);
+            return res.status(400).json({
+                message: "ບໍ່ສາມາດຈອງໂຕະສຳເລັດໄດ້. ການຈອງໃນວັນນີ້ຫຼັງຈາກ 20:00 ນ. ຈະຖືກຍົກເລີກອັດຕະໂນມັດ."
+            });
         }
+        // --- End of specific time validation logic ---
 
-        // --- ⬇️ ตรวจสอบโต๊ะและลูกค้า (ก่อน Transaction) ⬇️ ---
+
+        // --- ⬇️ Check Table and Customer Existence (before Transaction) ⬇️ ---
         const table = await prisma.table.findUnique({
             where: { id: Number(tableId) }
         });
@@ -27,15 +54,10 @@ exports.createReservation = async (req, res) => {
             return res.status(404).json({ message: "Table not found." });
         }
 
-        // ❗️ ตรวจสอบว่าโต๊ะถูกจองไปแล้วหรือยัง
+        // ❗️ Check if table is already reserved
         if (table.status === 'ຖືກຈອງແລ້ວ') {
-            return res.status(409).json({ message: `Table ${tableId} is already reserved (ຖືກຈອງແລ້ວ).` }); // 409 Conflict - บอกว่ามีคนจองแล้ว
+            return res.status(409).json({ message: `Table ${tableId} is already reserved (ຖືກຈອງແລ້ວ).` });
         }
-        // ❗️ หรือตรวจสอบสถานะอื่นๆ ที่ไม่ว่าง เช่น 'ວ່າງ' (ว่าง)
-        // if (table.status !== 'ວ່າງ') {
-        //     return res.status(409).json({ message: `Table ${tableId} is not available.` });
-        // }
-
 
         const customer = await prisma.customer.findUnique({
             where: { id: Number(customerId) }
@@ -44,34 +66,34 @@ exports.createReservation = async (req, res) => {
         if (!customer) {
             return res.status(404).json({ message: "Customer not found." });
         }
-        // --- ⬆️ สิ้นสุดการตรวจสอบ ⬆️ ---
+        // --- ⬆️ End Table and Customer Checks ⬆️ ---
 
 
-        // --- ⬇️ เริ่ม Transaction ⬇️ ---
+        // --- ⬇️ Start Transaction: Create Reservation and Update Table Status ⬇️ ---
         const newReservation = await prisma.$transaction(async (tx) => {
-            // 1. สร้างการจองใหม่
+            // 1. Create the new reservation
             const createdReservation = await tx.reservation.create({
                 data: {
                     customerId: Number(customerId),
                     tableId: Number(tableId),
-                    reservationTime: reservationDate,
-                    status: 'pending' // หรือ 'confirmed' ตามที่คุณต้องการ
+                    reservationTime: reservationDate, // Prisma will correctly store this Date object as UTC
+                    status: 'pending' // Or 'confirmed' as per your flow
                 },
                 include: {
                     customer: true,
-                    table: true // Include table เพื่อให้เห็นสถานะใหม่ทันที (แต่จะเห็นสถานะเก่านะ)
+                    table: true
                 }
             });
 
-            // 2. อัปเดตสถานะโต๊ะเป็น 'ຖືກຈອງແລ້ວ'
+            // 2. Update the table status to 'ຖືກຈອງແລ້ວ' (reserved)
             await tx.table.update({
                 where: { id: Number(tableId) },
                 data: { status: 'ຖືກຈອງແລ້ວ' }
             });
 
-            return createdReservation; // ส่งคืนข้อมูลการจองที่สร้างขึ้น
+            return createdReservation; // Return the created reservation data
         });
-        // --- ⬆️ สิ้นสุด Transaction ⬆️ ---
+        // --- ⬆️ End Transaction ⬆️ ---
 
         res.status(201).json(newReservation);
 
@@ -80,6 +102,7 @@ exports.createReservation = async (req, res) => {
         res.status(500).json({ message: "Server Error during reservation process" });
     }
 };
+
 
 
 // 📌 GET ALL RESERVATIONS
@@ -94,6 +117,9 @@ exports.getAllReservations = async (req, res) => {
                 reservationTime: 'asc' // Order by reservation time
             }
         });
+        // Prisma returns Date objects for DateTime fields. These are technically UTC
+        // but JavaScript's Date.prototype.toString() or JSON.stringify() might output them
+        // in local time or ISO format. The frontend is responsible for displaying them.
         res.json(reservations);
     } catch (error) {
         console.error("Error fetching reservations:", error);
@@ -133,7 +159,6 @@ exports.updateReservationStatus = async (req, res) => {
             return res.status(400).json({ message: "Status is required." });
         }
 
-        // เพิ่มสถานะอื่นๆ ที่อาจมี เช่น 'completed' (เสร็จสิ้น)
         const allowedStatuses = ['pending', 'confirmed', 'cancelled'];
         if (!allowedStatuses.includes(status)) {
             return res.status(400).json({ message: `Invalid status. Allowed statuses are: ${allowedStatuses.join(', ')}` });
@@ -146,7 +171,6 @@ exports.updateReservationStatus = async (req, res) => {
                 where: { id: Number(id) },
             });
 
-            // ถ้าไม่เจอ ให้โยน Error เพื่อให้ Transaction ล้มเหลว
             if (!reservation) {
                 throw new Error('ReservationNotFound');
             }
@@ -155,20 +179,16 @@ exports.updateReservationStatus = async (req, res) => {
             const updated = await tx.reservation.update({
                 where: { id: Number(id) },
                 data: { status: status },
-                include: { customer: true, table: true } // Include เพื่อให้ response มีข้อมูลครบ
+                include: { customer: true, table: true }
             });
 
             // 3. ถ้าสถานะเป็น 'cancelled' (หรือ 'completed') ให้อัปเดตสถานะโต๊ะ
             if (status === 'cancelled' || status === 'completed') {
-                // ❗️ ข้อควรระวัง: โค้ดนี้ตั้งโต๊ะเป็น 'ว่าง' ทันที
-                // ในระบบที่ซับซ้อน อาจต้องตรวจสอบก่อนว่ามี 'การจองอื่น' สำหรับโต๊ะนี้หรือไม่
                 await tx.table.update({
                     where: { id: reservation.tableId },
-                    data: { status: 'ວ່າງ' } // ⬅️ เปลี่ยนสถานะโต๊ะเป็น 'ว่าง'
+                    data: { status: 'ວ່າງ' }
                 });
-
             }
-
 
             return updated;
         });
@@ -177,7 +197,6 @@ exports.updateReservationStatus = async (req, res) => {
         res.json(updatedReservation);
 
     } catch (error) {
-        // จัดการ Error ที่เราโยนเอง หรือ Prisma P2025 (Record not found)
         if (error.message === 'ReservationNotFound' || error.code === 'P2025') {
             return res.status(404).json({ message: "Reservation not found" });
         }
@@ -191,7 +210,6 @@ exports.deleteReservation = async (req, res) => {
     try {
         const { id } = req.params;
 
-        // Fetch reservation first to get tableId
         const reservation = await prisma.reservation.findUnique({
             where: { id: Number(id) }
         });
@@ -200,14 +218,11 @@ exports.deleteReservation = async (req, res) => {
             return res.status(404).json({ message: "Reservation not found" });
         }
 
-        // Use transaction to ensure both operations complete successfully
         await prisma.$transaction(async (tx) => {
-            // Delete the reservation
             await tx.reservation.delete({
                 where: { id: Number(id) }
             });
 
-            // Update table status to available
             await tx.table.update({
                 where: { id: reservation.tableId },
                 data: { status: 'ວ່າງ' }

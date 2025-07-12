@@ -58,19 +58,19 @@ exports.addOrderToTable = async (req, res) => {
         const { empId, tableId, orderDetails } = req.body;
 
         if (!empId || !tableId || !orderDetails || !Array.isArray(orderDetails)) {
-            return res.status(400).json({ message: "Employee ID, Table ID, and order details are required." });
+            return res.status(400).json({ message: "ต้องระบุรหัสพนักงาน, รหัสโต๊ะ และรายละเอียดออเดอร์" });
         }
 
         const validItems = orderDetails.filter(d => d && (d.foodId || d.productUnitId));
 
         if (validItems.length === 0) {
-            return res.status(400).json({ message: "No valid items provided in the order details." });
+            return res.status(400).json({ message: "ไม่มีรายการที่ถูกต้องในรายละเอียดออเดอร์" });
         }
 
         const validatedDetails = await prepareAndValidateDetails(validItems);
         const newItemsTotalPrice = validatedDetails.reduce((sum, item) => sum + (item.price * item.quantity), 0);
 
-        // --- 1. STOCK CHECK (ยังคงเดิมเพื่อตรวจสอบก่อน) ---
+        // --- 1. ตรวจสอบสต็อก (ยังคงเหมือนเดิมเพื่อตรวจสอบก่อน) ---
         const stockRequirements = new Map();
         const productUnitIdsForStockCheck = validatedDetails
             .filter(d => d.productUnitId)
@@ -103,7 +103,7 @@ exports.addOrderToTable = async (req, res) => {
 
             for (const drink of drinksInStock) {
                 if (drink.qty <= 0) {
-                    return res.status(400).json({ message: `ເຄື່ອງດື່ມນີ້ໝົດສະຕ໊ອກ! (${drink.name})` });
+                    return res.status(400).json({ message: `เครื่องດື່ມນີ້ໝົດສະຕ໊ອກ! (${drink.name})` });
                 }
                 const requiredQty = stockRequirements.get(drink.id);
                 if (drink.qty < requiredQty) {
@@ -115,24 +115,60 @@ exports.addOrderToTable = async (req, res) => {
         const parsedTableId = parseInt(tableId, 10);
         const parsedEmpId = parseInt(empId, 10);
 
-        // --- 2. TRANSACTION (สร้างออเดอร์ + ตัดสต็อก) ---
+        // --- 2. TRANSACTION (สร้าง/อัปเดตออเดอร์ + ตัดสต็อก + เปลี่ยนสถานะการจอง) ---
         const resultOrder = await prisma.$transaction(async (tx) => {
-            // ... (ส่วนการสร้าง Order, OrderRound, OrderDetail เหมือนเดิม) ...
             let mainOrder = await tx.order.findFirst({
                 where: { tableId: parsedTableId, billStatus: BillStatus.OPEN },
             });
+
             if (!mainOrder) {
-                mainOrder = await tx.order.create({ data: { empId: parsedEmpId, tableId: parsedTableId, total_price: newItemsTotalPrice, billStatus: BillStatus.OPEN } });
+                // สร้าง Order ใหม่ ถ้ายังไม่มี Order ที่ OPEN อยู่สำหรับโต๊ะนี้
+                mainOrder = await tx.order.create({
+                    data: {
+                        empId: parsedEmpId,
+                        tableId: parsedTableId,
+                        total_price: newItemsTotalPrice,
+                        billStatus: BillStatus.OPEN
+                    }
+                });
             } else {
-                mainOrder = await tx.order.update({ where: { id: mainOrder.id }, data: { total_price: { increment: newItemsTotalPrice }, empId: parsedEmpId } });
+                // อัปเดต Order เดิม ถ้ามีอยู่แล้ว
+                mainOrder = await tx.order.update({
+                    where: { id: mainOrder.id },
+                    data: { total_price: { increment: newItemsTotalPrice }, empId: parsedEmpId }
+                });
             }
+
             const lastRound = await tx.orderRound.findFirst({ where: { orderId: mainOrder.id }, orderBy: { roundNumber: 'desc' } });
             const nextRoundNumber = (lastRound?.roundNumber || 0) + 1;
-            const newOrderRound = await tx.orderRound.create({ data: { orderId: mainOrder.id, roundNumber: nextRoundNumber, kitchenStatus: KitchenStatus.PENDING } });
-            const detailCreations = validatedDetails.map(detail => tx.orderDetail.create({ data: { orderRoundId: newOrderRound.id, foodId: detail.foodId, productUnitId: detail.productUnitId, quantity: detail.quantity, price: detail.price } }));
+
+            // ตรวจสอบว่าในรอบนี้มีรายการอาหาร (foodId) หรือไม่
+            const containsFood = validatedDetails.some(detail => detail.foodId);
+
+            // ถ้าไม่มีรายการอาหารเลย (มีแต่เครื่องดื่ม) ให้ตั้งสถานะครัวเป็น SERVED
+            // ถ้ามีรายการอาหาร ให้ตั้งสถานะครัวเป็น PENDING เพื่อรอครัวทำ
+            const initialKitchenStatus = containsFood ? KitchenStatus.PENDING : KitchenStatus.SERVED;
+
+            const newOrderRound = await tx.orderRound.create({
+                data: {
+                    orderId: mainOrder.id,
+                    roundNumber: nextRoundNumber,
+                    kitchenStatus: initialKitchenStatus
+                }
+            });
+
+            const detailCreations = validatedDetails.map(detail => tx.orderDetail.create({
+                data: {
+                    orderRoundId: newOrderRound.id,
+                    foodId: detail.foodId,
+                    productUnitId: detail.productUnitId,
+                    quantity: detail.quantity,
+                    price: detail.price
+                }
+            }));
             await Promise.all(detailCreations);
 
-            // --- ✨ 2.1. เพิ่มส่วนตัดสต็อกเข้ามาใน Transaction นี้ ---
+            // --- 2.1. ตัดสต็อกเข้ามาใน Transaction นี้ ---
             if (stockRequirements.size > 0) {
                 const stockUpdates = Array.from(stockRequirements.entries()).map(([drinkId, quantityToDecrement]) =>
                     tx.drink.update({
@@ -143,16 +179,45 @@ exports.addOrderToTable = async (req, res) => {
                 await Promise.all(stockUpdates);
             }
 
-            // ... (ส่วนการอัปเดตสถานะโต๊ะและ return ค่าเหมือนเดิม) ...
+            // --- 2.2. อัปเดตสถานะโต๊ะเป็น 'ຖືກຈອງແລ້ວ' (หากยังไม่ได้ตั้ง) ---
             await tx.table.update({ where: { id: parsedTableId }, data: { status: 'ຖືກຈອງແລ້ວ' } });
+
+            // =========================================================================
+            // ✨ เริ่มต้น: ส่วนที่เพิ่มเข้ามาใหม่ตามความต้องการ ✨
+            // เปลี่ยนสถานะการจองเป็น 'confirmed' เมื่อมีการเพิ่มออเดอร์ลงโต๊ะ
+            // =========================================================================
+            // ค้นหาการจองที่เกี่ยวข้องกับโต๊ะนี้และยังมีสถานะ 'pending'
+            const existingPendingReservation = await tx.reservation.findFirst({
+                where: {
+                    tableId: parsedTableId,
+                    status: 'pending',
+                    // คุณอาจต้องการเพิ่มเงื่อนไขเกี่ยวกับ reservationTime ด้วย เช่น:
+                    // reservationTime: { lte: new Date() } // ถ้าต้องการยืนยันเฉพาะการจองที่ถึงเวลาแล้ว
+                    // หรือไม่ใส่เงื่อนไขเวลาก็ได้ หากต้องการยืนยันทันทีที่เริ่มใช้โต๊ะ
+                },
+                orderBy: { reservationTime: 'asc' } // ถ้ามีหลายการจอง pending, ให้ยืนยันอันที่ใกล้ที่สุด
+            });
+
+            if (existingPendingReservation) {
+                // หากพบการจองที่ 'pending' ให้เปลี่ยนสถานะเป็น 'confirmed'
+                await tx.reservation.update({
+                    where: { id: existingPendingReservation.id },
+                    data: { status: 'confirmed' }
+                });
+                console.log(`การจอง ID ${existingPendingReservation.id} สำหรับโต๊ะ ${parsedTableId} ได้รับการอัปเดตเป็น CONFIRMED.`);
+            }
+            // =========================================================================
+            // ✨ สิ้นสุด: ส่วนที่เพิ่มเข้ามาใหม่ตามความต้องการ ✨
+            // =========================================================================
+
             return tx.order.findUnique({ where: { id: mainOrder.id }, include: FULL_ORDER_INCLUDE });
-        }, { timeout: 15000 });
+        }, { timeout: 15000 }); // เพิ่ม timeout หาก Transaction ใช้เวลานาน
 
         res.status(201).json(resultOrder);
 
     } catch (error) {
-        console.error("Error creating/updating order:", error);
-        res.status(500).json({ message: "Server Error processing order", error: error.message });
+        console.error("เกิดข้อผิดพลาดในการสร้าง/อัปเดตออเดอร์:", error);
+        res.status(500).json({ message: "เกิดข้อผิดพลาดของเซิร์ฟเวอร์ในการประมวลผลออเดอร์", error: error.message });
     }
 };
 
@@ -163,14 +228,15 @@ exports.checkoutOrder = async (req, res) => {
     try {
         const { orderId } = req.params;
         const { paymentMethod } = req.body;
+        console.log(req.body);
 
         if (!paymentMethod || !Object.values(PaymentMethod).includes(paymentMethod)) {
-            return res.status(400).json({ message: "Invalid payment method." });
+            return res.status(400).json({ message: "วิธีการชำระเงินไม่ถูกต้อง" });
         }
 
         const parsedOrderId = parseInt(orderId, 10);
 
-        // Transaction จะเหลือแค่การอัปเดตสถานะ Order และ Table
+        // Transaction จะรวมการอัปเดตสถานะ Order, Table และ Reservation
         const updatedOrder = await prisma.$transaction(async (tx) => {
             const currentOrder = await tx.order.findUnique({
                 where: { id: parsedOrderId },
@@ -178,19 +244,19 @@ exports.checkoutOrder = async (req, res) => {
             });
 
             if (!currentOrder || currentOrder.billStatus !== BillStatus.OPEN) {
-                throw new Error("Order not found or is not OPEN.");
+                throw new Error("ไม่พบออเดอร์หรือออเดอร์ไม่ได้อยู่ในสถานะ OPEN");
             }
 
-            // --- ส่วนการคำนวณและตัดสต็อกถูกลบออกจากที่นี่ ---
-
+            // 1. อัปเดตสถานะโต๊ะเป็น 'ว่าง'
             if (currentOrder.tableId) {
                 await tx.table.update({
                     where: { id: currentOrder.tableId },
-                    data: { status: 'ວ່າງ' }
+                    data: { status: 'ວ່າງ' } // เปลี่ยนสถานะโต๊ะเป็น 'ว่าง' เมื่อเช็คเอาท์
                 });
             }
 
-            return tx.order.update({
+            // 2. อัปเดตสถานะ Order เป็น PAID
+            const orderResult = await tx.order.update({
                 where: { id: parsedOrderId },
                 data: {
                     billStatus: BillStatus.PAID,
@@ -198,16 +264,45 @@ exports.checkoutOrder = async (req, res) => {
                 },
                 include: FULL_ORDER_INCLUDE // ใช้ helper เพื่อส่งข้อมูลกลับให้สมบูรณ์
             });
+
+            // =========================================================================
+            // ✨ เริ่มต้น: ส่วนที่เพิ่มเข้ามาใหม่ตามความต้องการ ✨
+            // เปลี่ยนสถานะการจองที่เกี่ยวข้องกับโต๊ะนี้เป็น 'cancelled'
+            // =========================================================================
+            // ค้นหาการจองที่ยังไม่เสร็จสิ้นสำหรับโต๊ะนี้
+            const existingReservation = await tx.reservation.findFirst({
+                where: {
+                    tableId: currentOrder.tableId,
+                    status: {
+                        notIn: ['cancelled', 'completed'] // ไม่ใช่สถานะที่ถูกยกเลิกหรือเสร็จสิ้นแล้ว
+                    }
+                },
+                orderBy: { reservationTime: 'asc' } // ถ้ามีหลายการจอง, เอาอันที่เก่าที่สุด/ใกล้สุด
+            });
+
+            if (existingReservation) {
+                // หากพบการจองที่ยังไม่เสร็จสิ้น ให้เปลี่ยนสถานะเป็น 'cancelled'
+                await tx.reservation.update({
+                    where: { id: existingReservation.id },
+                    data: { status: 'cancelled' }
+                });
+                console.log(`การจอง ID ${existingReservation.id} สำหรับโต๊ะ ${currentOrder.tableId} ได้รับการอัปเดตเป็น CANCELLED.`);
+            }
+            // =========================================================================
+            // ✨ สิ้นสุด: ส่วนที่เพิ่มเข้ามาใหม่ตามความต้องการ ✨
+            // =========================================================================
+
+            return orderResult; // คืนผลลัพธ์ของออเดอร์ที่อัปเดต
         }, { timeout: 20000 });
 
         res.json({
-            message: "Order paid successfully and table status updated.",
+            message: "ชำระเงินออเดอร์สำเร็จและอัปเดตสถานะโต๊ะแล้ว",
             order: updatedOrder
         });
 
     } catch (error) {
-        console.error("Error checking out order:", error);
-        res.status(500).json({ message: "Server Error during checkout", error: error.message });
+        console.error("เกิดข้อผิดพลาดในการชำระเงินออเดอร์:", error);
+        res.status(500).json({ message: "เกิดข้อผิดพลาดของเซิร์ฟเวอร์ระหว่างการชำระเงิน", error: error.message });
     }
 };
 

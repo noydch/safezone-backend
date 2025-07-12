@@ -57,7 +57,7 @@ exports.createDrink = async (req, res) => {
                         // ✨ 3. สร้าง ProductUnit สำหรับขายเป็น "หน่วยเดี่ยว" โดยใช้ชื่อจาก baseUnit ✨
                         await tx.productUnit.create({
                             data: {
-                                name: `${name} (${baseUnit.name})`, // <-- ใช้ชื่อจาก baseUnit ที่ดึงมา
+                                name: `${baseUnit.name}`, // <-- ใช้ชื่อจาก baseUnit ที่ดึงมา
                                 price: parseFloat(price),
                                 baseItemsCount: 1, // 1 หน่วยเดี่ยว = 1 หน่วยพื้นฐาน
                                 drinkId: newDrink.id
@@ -124,6 +124,8 @@ exports.getDrink = async (req, res) => {
 exports.deleteDrink = async (req, res) => {
     // หมายเหตุ: Logic นี้จะทำงานถูกต้องเมื่อใน Schema ของ ProductUnit มี `onDelete: Cascade`
     // การลบ Drink จะทำให้ ProductUnit ที่เกี่ยวข้องถูกลบตามไปด้วยโดยอัตโนมัติ
+    console.log(req.params);
+
     try {
         const { id } = req.params;
         const drink = await prisma.drink.findUnique({
@@ -148,9 +150,7 @@ exports.deleteDrink = async (req, res) => {
         res.json({ message: "Drink and related product units deleted successfully" });
     } catch (error) {
         console.error("Error deleting drink:", error);
-        if (error.code === 'P2003') { // กรณีถูกใช้งานใน OrderDetail
-            return res.status(400).json({ message: "Cannot delete this drink because it is part of an existing order." });
-        }
+
         res.status(500).json({ message: "Server Error" });
     }
 };
