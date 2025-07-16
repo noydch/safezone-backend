@@ -180,7 +180,7 @@ exports.addOrderToTable = async (req, res) => {
             }
 
             // --- 2.2. อัปเดตสถานะโต๊ะเป็น 'ຖືກຈອງແລ້ວ' (หากยังไม่ได้ตั้ง) ---
-            await tx.table.update({ where: { id: parsedTableId }, data: { status: 'ຖືກຈອງແລ້ວ' } });
+            await tx.table.update({ where: { id: parsedTableId }, data: { status: 'ກຳລັງໃຊ້ງານ' } });
 
             // =========================================================================
             // ✨ เริ่มต้น: ส่วนที่เพิ่มเข้ามาใหม่ตามความต้องการ ✨

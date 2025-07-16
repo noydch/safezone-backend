@@ -69,3 +69,27 @@ exports.putCategory = async (req, res) => {
         res.status(500).json({ message: "Server error" })
     }
 }
+
+exports.getCategoryById = async (req, res) => {
+    try {
+        const { id } = req.params;
+
+        const category = await prisma.category.findUnique({
+            where: { id: Number(id) },
+            include: {
+                foods: true,
+                drinks: true
+            }
+        });
+
+
+        if (!category) {
+            return res.status(404).json({ message: "Category not found" });
+        }
+
+        res.json(category);
+    } catch (error) {
+        console.error("Error fetching category by id:", error);
+        res.status(500).json({ message: "Server error" });
+    }
+};

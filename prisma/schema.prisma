@@ -34,7 +34,7 @@ enum KitchenStatus {
 enum BillStatus {
   OPEN // โต๊ะเปิดอยู่, สั่งเพิ่มได้, ยังไม่ชำระ
   PAID // ชำระเงินแล้ว
-  CANCELLED // ยกเลิก
+  // CANCELLED // ยกเลิก
 }
 
 // วิธีการชำระเงิน

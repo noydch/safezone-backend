@@ -154,22 +154,27 @@ exports.updateFood = async (req, res) => {
     }
 };
 
-exports.getFoodAndDrinkReport = async (req, res) => {
+// 📌 GET DRINK REPORT ONLY
+exports.getDrinkReport = async (req, res) => {
     try {
-        const foods = await prisma.food.findMany({
-            include: { category: true }
-        });
-
         const drinks = await prisma.drink.findMany({
-            include: { Category: true }
+            include: {
+                Category: true,
+                productUnits: {
+                    select: {
+                        id: true,
+                        name: true,
+                        price: true,
+                        baseItemsCount: true
+                    }
+                }
+            }
         });
 
-        res.json({
-            foods,
-            drinks
-        });
+        res.json({ drinks });
     } catch (error) {
-        console.error("Error generating report:", error);
+        console.error("Error generating drink report:", error);
         res.status(500).json({ message: "Server Error" });
     }
 };
+
