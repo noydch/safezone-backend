@@ -143,13 +143,23 @@ CREATE TABLE `import_details` (
 ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
 -- CreateTable
+CREATE TABLE `TableGroup` (
+    `id` INTEGER NOT NULL AUTO_INCREMENT,
+    `createdAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    `updatedAt` DATETIME(3) NOT NULL,
+
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
 CREATE TABLE `tables` (
     `id` INTEGER NOT NULL AUTO_INCREMENT,
     `table_number` INTEGER NOT NULL,
-    `status` VARCHAR(191) NOT NULL DEFAULT 'ວ່າງ',
+    `status` ENUM('AVAILABLE', 'RESERVED', 'OCCUPIED', 'MERGED') NOT NULL DEFAULT 'AVAILABLE',
     `seat` INTEGER NOT NULL,
     `createdAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
     `updatedAt` DATETIME(3) NOT NULL,
+    `groupId` INTEGER NULL,
 
     PRIMARY KEY (`id`)
 ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
@@ -161,8 +171,9 @@ CREATE TABLE `orders` (
     `tableId` INTEGER NOT NULL,
     `orderDate` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
     `total_price` DOUBLE NOT NULL,
-    `billStatus` ENUM('OPEN', 'PAID', 'CANCELLED') NOT NULL DEFAULT 'OPEN',
+    `billStatus` ENUM('OPEN', 'PAID') NOT NULL DEFAULT 'OPEN',
     `payment_method` ENUM('CASH', 'TRANSFER') NULL,
+    `mergedFromIds` VARCHAR(191) NULL,
     `createdAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
     `updatedAt` DATETIME(3) NOT NULL,
 
@@ -251,6 +262,9 @@ ALTER TABLE `import_details` ADD CONSTRAINT `import_details_importId_fkey` FOREI
 
 -- AddForeignKey
 ALTER TABLE `import_details` ADD CONSTRAINT `import_details_drinkId_fkey` FOREIGN KEY (`drinkId`) REFERENCES `drinks`(`id`) ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE `tables` ADD CONSTRAINT `tables_groupId_fkey` FOREIGN KEY (`groupId`) REFERENCES `TableGroup`(`id`) ON DELETE SET NULL ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE `orders` ADD CONSTRAINT `orders_empId_fkey` FOREIGN KEY (`empId`) REFERENCES `employees`(`id`) ON DELETE RESTRICT ON UPDATE CASCADE;

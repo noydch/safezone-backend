@@ -1,105 +1,92 @@
-const prisma = require('../config/prisma');
+const { PrismaClient } = require('@prisma/client');
+const prisma = new PrismaClient();
 
-// 📌 CREATE RESERVATION (ปรับปรุงให้เปลี่ยนสถานะโต๊ะ)
 exports.createReservation = async (req, res) => {
     try {
-        const { customerId, tableId, reservationTime } = req.body;
-        console.log("Request Body received for createReservation:", req.body); // Log full request body
+        const { customerData, tableId, reservationTime } = req.body;
 
-        if (!customerId || !tableId || !reservationTime) {
-            return res.status(400).json({ message: "Customer ID, Table ID, and Reservation Time are required." });
+        // เช็คข้อมูลที่จำเป็น
+        if (!customerData || !tableId || !reservationTime) {
+            return res.status(400).json({ message: "Missing required fields" });
         }
 
-        // --- Debugging incoming time ---
-        console.log("Incoming reservationTime string (from frontend):", reservationTime);
-        const reservationDate = new Date(reservationTime); // Parse ISO string into Date object (this is UTC)
-        console.log("Parsed reservationDate object (on backend, in server's local time):", reservationDate);
+        // แปลง string เป็น Date
+        const parsedDate = new Date(reservationTime);
+        if (isNaN(parsedDate)) {
+            return res.status(400).json({ message: "Invalid reservationTime format" });
+        }
 
-        // --- Logic: Prevent bookings for today at or after 20:00 (8 PM local time) ---
-        const now = new Date(); // Current date and time on the server (local timezone: GMT+7 in Thailand)
+        // ตรวจสอบว่ามีการจองโต๊ะในวันเดียวกันหรือยัง
+        const startOfDay = new Date(parsedDate);
+        startOfDay.setHours(0, 0, 0, 0);
+        const endOfDay = new Date(parsedDate);
+        endOfDay.setHours(23, 59, 59, 999);
 
-        // Extract components for comparison in the server's local timezone
-        const currentYear = now.getFullYear();
-        const currentMonth = now.getMonth();
-        const currentDay = now.getDate();
+        const existingReservation = await prisma.reservation.findFirst({
+            where: {
+                tableId: Number(tableId),
+                reservationTime: {
+                    gte: startOfDay,
+                    lte: endOfDay,
+                },
+            },
+        });
 
-        const reservationYear = reservationDate.getFullYear();
-        const reservationMonth = reservationDate.getMonth();
-        const reservationDay = reservationDate.getDate();
-        const reservationHour = reservationDate.getHours(); // Hour in server's local time
-
-        // Check if the reservation date is today
-        const isReservationToday = (
-            reservationYear === currentYear &&
-            reservationMonth === currentMonth &&
-            reservationDay === currentDay
-        );
-
-        // If it's today AND the reservation hour is 8 PM (20:00) or later, reject the booking.
-        if (isReservationToday && reservationHour >= 20) {
-            console.log(`Attempted booking for today (${reservationDate.toLocaleDateString()}) at ${reservationHour}:00 (local time) which is >= 20:00. Rejecting.`);
-            return res.status(400).json({
-                message: "ບໍ່ສາມາດຈອງໂຕະສຳເລັດໄດ້. ການຈອງໃນວັນນີ້ຫຼັງຈາກ 20:00 ນ. ຈະຖືກຍົກເລີກອັດຕະໂນມັດ."
+        if (existingReservation) {
+            const reservedDateStr = new Date(existingReservation.reservationTime).toLocaleDateString('th-TH');
+            return res.status(409).json({
+                message: `ໂຕະນີ້ຖືກຈອງໃນວັນທີ ${reservedDateStr} ແລ້ວ`
             });
         }
-        // --- End of specific time validation logic ---
 
+        // เริ่ม transaction
+        const { customer, reservation, updatedTable } = await prisma.$transaction(async (tx) => {
+            // หาลูกค้าจากเบอร์โทร
+            let existingCustomer = await tx.customer.findUnique({
+                where: { phone: customerData.phone }
+            });
 
-        // --- ⬇️ Check Table and Customer Existence (before Transaction) ⬇️ ---
-        const table = await prisma.table.findUnique({
-            where: { id: Number(tableId) }
-        });
+            // ถ้าไม่มีลูกค้า ให้สร้างใหม่
+            if (!existingCustomer) {
+                existingCustomer = await tx.customer.create({
+                    data: customerData
+                });
+            }
 
-        if (!table) {
-            return res.status(404).json({ message: "Table not found." });
-        }
-
-        // ❗️ Check if table is already reserved
-        if (table.status === 'ຖືກຈອງແລ້ວ') {
-            return res.status(409).json({ message: `Table ${tableId} is already reserved (ຖືກຈອງແລ້ວ).` });
-        }
-
-        const customer = await prisma.customer.findUnique({
-            where: { id: Number(customerId) }
-        });
-
-        if (!customer) {
-            return res.status(404).json({ message: "Customer not found." });
-        }
-        // --- ⬆️ End Table and Customer Checks ⬆️ ---
-
-
-        // --- ⬇️ Start Transaction: Create Reservation and Update Table Status ⬇️ ---
-        const newReservation = await prisma.$transaction(async (tx) => {
-            // 1. Create the new reservation
-            const createdReservation = await tx.reservation.create({
+            // สร้างการจอง เชื่อม customer และ table
+            const reservation = await tx.reservation.create({
                 data: {
-                    customerId: Number(customerId),
-                    tableId: Number(tableId),
-                    reservationTime: reservationDate, // Prisma will correctly store this Date object as UTC
-                    status: 'pending' // Or 'confirmed' as per your flow
-                },
-                include: {
-                    customer: true,
-                    table: true
+                    reservationTime: parsedDate,
+                    table: { connect: { id: Number(tableId) } },
+                    customer: { connect: { id: existingCustomer.id } },
                 }
             });
 
-            // 2. Update the table status to 'ຖືກຈອງແລ້ວ' (reserved)
-            await tx.table.update({
+            // อัปเดตสถานะโต๊ะ
+            const updatedTable = await tx.table.update({
                 where: { id: Number(tableId) },
                 data: { status: 'ຖືກຈອງແລ້ວ' }
             });
 
-            return createdReservation; // Return the created reservation data
+            return { customer: existingCustomer, reservation, updatedTable };
         });
-        // --- ⬆️ End Transaction ⬆️ ---
 
-        res.status(201).json(newReservation);
+        // ส่งผลลัพธ์กลับ
+        res.status(201).json({
+            message: "Reservation created successfully",
+            customer,
+            reservation
+        });
 
     } catch (error) {
-        console.error("Error during reservation creation and table update:", error);
-        res.status(500).json({ message: "Server Error during reservation process" });
+        console.error("Create reservation error:", error);
+
+        // กรณี unique constraint อื่นๆ
+        if (error.code === 'P2002') {
+            return res.status(409).json({ message: "Duplicate entry detected." });
+        }
+
+        res.status(500).json({ message: "Internal server error" });
     }
 };
 

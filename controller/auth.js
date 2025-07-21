@@ -81,7 +81,7 @@ exports.register = async (req, res) => {
         })
         if (user) {
             return res.status(400).json({
-                message: "Email already Exits !!!"
+                message: "ມີອີເມລນີ້ໃນລະບົບແລ້ວ !!!"
             })
         }
 
