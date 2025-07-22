@@ -40,15 +40,21 @@ const prepareAndValidateDetails = async (orderDetails) => {
             throw new Error(`Invalid quantity for item: ${JSON.stringify(item)}`);
         }
 
+        // Ensure itemType is present
+        const itemType = item.itemType;
+        if (!itemType) {
+            throw new Error(`ItemType is missing for item: ${JSON.stringify(item)}`);
+        }
+
         let validatedItem;
         if (item.foodId) {
             const food = foodMap.get(parseInt(item.foodId, 10));
             if (!food) throw new Error(`Food with ID ${item.foodId} not found.`);
-            validatedItem = { foodId: food.id, quantity, price: food.price };
+            validatedItem = { foodId: food.id, quantity, price: food.price, itemType: itemType }; // Include itemType
         } else if (item.productUnitId) {
             const productUnit = productUnitMap.get(parseInt(item.productUnitId, 10));
             if (!productUnit) throw new Error(`ProductUnit with ID ${item.productUnitId} not found.`);
-            validatedItem = { productUnitId: productUnit.id, quantity, price: productUnit.price };
+            validatedItem = { productUnitId: productUnit.id, quantity, price: productUnit.price, itemType: itemType }; // Include itemType
         } else {
             throw new Error('OrderDetail item must have either foodId or productUnitId');
         }
@@ -166,7 +172,8 @@ exports.addOrderToTable = async (req, res) => {
                     foodId: detail.foodId,
                     productUnitId: detail.productUnitId,
                     quantity: detail.quantity,
-                    price: detail.price
+                    price: detail.price,
+                    itemType: detail.itemType
                 }
             }));
             await Promise.all(detailCreations);
@@ -723,6 +730,65 @@ exports.getIncomeExpenseReport = async (req, res) => {
     } catch (error) {
         console.error("Error generating income/expense report:", error);
         res.status(500).json({ message: "Server Error", error: error.message });
+    }
+};
+
+
+// ยกเลิกเฉพาะรายการอาหาร
+exports.cancelOrderDetail = async (req, res) => {
+    const { id } = req.params;
+
+
+    if (!id) {
+        return res.status(400).json({ message: "Missing order detail id parameter" });
+    }
+
+    const parsedId = parseInt(id, 10);
+    if (isNaN(parsedId)) {
+        return res.status(400).json({ message: "Invalid order detail id parameter" });
+    }
+
+    try {
+        const orderDetail = await prisma.orderDetail.findUnique({
+            where: { id: parsedId },
+        });
+        const orderId = await prisma.order.findUnique({
+            where: { id: Number(id) },
+        })
+
+
+        if (!orderDetail) {
+            return res.status(404).json({ message: 'ບໍ່ພົບລາຍການອາຫານນີ້' });
+        }
+
+        if (orderDetail.itemType !== 'FOOD') {
+            return res.status(400).json({ message: 'ບໍ່ສາມາດຍົກເລີກລາຍການທີ່ບໍ່ແມ່ນອາຫານໄດ້!!!' });
+        }
+
+        const cancelled = await prisma.orderDetail.update({
+            where: { id: parsedId },
+            data: {
+                status: 'CANCELLED',
+                cancelReason: 'ວັດຖຸດິບໝົດ!',
+            },
+        });
+
+        // ✅ แจ้งเตือนแบบ real-time ไปยังพนักงานทุกคน
+        global.io.emit('orderItemCancelled', {
+            message: 'ລາຍການຖືກຍົກເລີກ',
+            orderNumber: orderId,
+            orderDetailId: parsedId,
+            reason: 'ວັດຖຸດິບໝົດ!',
+        });
+
+        res.json({
+            message: 'ຍົກເລີກການອາຫານສຳເລັດ!!!',
+            cancelled,
+        });
+
+    } catch (error) {
+        console.error('ຍົກເລີກລາຍການອາຫານລົ້ມເຫຼວ:', error);
+        res.status(500).json({ message: 'ເກີດຂໍ້ຜິດພາດໃນການຍົກເລີກອາຫານ!' });
     }
 };
 

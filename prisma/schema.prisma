@@ -42,6 +42,19 @@ enum PaymentMethod {
   TRANSFER // สำหรับเงินโอน
 }
 
+enum ItemType {
+  FOOD
+  DRINK
+}
+
+enum OrderDetailStatus {
+  WAITING
+  COOKING
+  DONE
+  CANCELLED
+}
+
+
 // --- Models ---
 model Employee {
   id        Int      @id @default(autoincrement())
@@ -252,19 +265,23 @@ model OrderRound {
 }
 
 model OrderDetail {
-  id            Int          @id @default(autoincrement())
-  orderRound    OrderRound   @relation(fields: [orderRoundId], references: [id], onDelete: Cascade)
+  id            Int             @id @default(autoincrement())
+  orderRound    OrderRound      @relation(fields: [orderRoundId], references: [id], onDelete: Cascade)
   orderRoundId  Int
-  food          Food?        @relation(fields: [foodId], references: [id])
+  food          Food?           @relation(fields: [foodId], references: [id])
   foodId        Int?
   productUnitId Int?
-  productUnit   ProductUnit? @relation(fields: [productUnitId], references: [id])
+  productUnit   ProductUnit?    @relation(fields: [productUnitId], references: [id])
   quantity      Int
   price         Float
-  createdAt     DateTime     @default(now())
+  itemType      ItemType        // ประเภทว่าเป็น FOOD หรือ DRINK
+  status        OrderDetailStatus @default(WAITING) // สถานะของ order detail
+  cancelReason  String?         // เหตุผลที่ยกเลิก (ถ้ามี)
+  createdAt     DateTime        @default(now())
 
   @@map("order_details")
 }
+
 
 model Customer {
   id          Int           @id @default(autoincrement())
