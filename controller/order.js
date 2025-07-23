@@ -541,8 +541,10 @@ exports.moveTable = async (req, res) => {
             return res.status(400).json({ message: "ต้องระบุโต๊ะต้นทางและโต๊ะปลายทางที่แตกต่างกัน" });
         }
 
-        const fromTable = await prisma.table.findUnique({ where: { id: fromTableId } });
-        const toTable = await prisma.table.findUnique({ where: { id: toTableId } });
+        const [fromTable, toTable] = await Promise.all([
+            prisma.table.findUnique({ where: { id: fromTableId } }),
+            prisma.table.findUnique({ where: { id: toTableId } }),
+        ]);
 
         if (!fromTable || !toTable) {
             return res.status(404).json({ message: "ไม่พบโต๊ะต้นทางหรือปลายทาง" });
@@ -553,27 +555,55 @@ exports.moveTable = async (req, res) => {
         }
 
         const openOrder = await prisma.order.findFirst({
-            where: { tableId: fromTableId, billStatus: BillStatus.OPEN }
+            where: {
+                tableId: fromTableId,
+                billStatus: BillStatus.OPEN
+            },
+            include: {
+                table: true
+            }
         });
 
         if (!openOrder) {
-            return res.status(400).json({ message: "โต๊ะต้นทางไม่มีออเดอร์เปิดอยู่" });
+            return res.status(404).json({ message: "ไม่พบออเดอร์ที่เปิดอยู่ในโต๊ะต้นทาง" });
         }
 
         await prisma.$transaction(async (tx) => {
+            // ย้าย order ไปยังโต๊ะใหม่
             await tx.order.update({
                 where: { id: openOrder.id },
-                data: { tableId: toTableId }
+                data: {
+                    tableId: toTableId,
+                    // ถ้าต้องการ clear mergedFromIds หรือ update ด้วย
+                    mergedFromIds: null
+                }
             });
 
-            await tx.table.update({ where: { id: fromTableId }, data: { status: "ວ່າງ" } });
-            await tx.table.update({ where: { id: toTableId }, data: { status: "ກຳລັງໃຊ້ງານ" } });
+            // อัปเดตสถานะโต๊ะเก่าให้เป็น "ວ່າງ"
+            await tx.table.update({
+                where: { id: fromTableId },
+                data: {
+                    status: "ວ່າງ",
+                    mergedFromIds: null,
+                    groupId: null
+                }
+            });
+
+            // อัปเดตสถานะโต๊ะใหม่ให้เป็น "ກຳລັງໃຊ້ງານ"
+            await tx.table.update({
+                where: { id: toTableId },
+                data: {
+                    status: "ກຳລັງໃຊ້ງານ",
+                    mergedFromIds: null,
+                    groupId: null
+                }
+            });
         });
 
-        res.json({ message: "ย้ายโต๊ะสำเร็จ" });
+        return res.json({ message: "ย้ายโต๊ะสำเร็จ" });
     } catch (error) {
         console.error("Error moving table:", error);
-        res.status(500).json({ message: "Server Error moving table", error: error.message });
+        return res.status(500).json({ message: "Server Error moving table", error: error.message });
     }
 };
 
