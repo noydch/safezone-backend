@@ -1,6 +1,6 @@
 const express = require('express');
 const cors = require('cors');
-const { addOrderToTable, getAllOrders, getOrderById, deleteOrder, updateRoundKitchenStatus, checkoutOrder, cancelOrder, moveTable, mergeTable, cancelOrderDetail } = require('../controller/order');
+const { addOrderToTable, getAllOrders, getOrderById, deleteOrder, updateRoundKitchenStatus, cancelOrder, moveTable, mergeTable, cancelOrderDetail, checkoutOrder, getTableGroupsWithTables } = require('../controller/order');
 
 const router = express.Router();
 router.use(cors());
@@ -34,5 +34,6 @@ router.post('/orders/moveTable', moveTable);
 
 // --- เพิ่ม Route สำหรับรวมโต๊ะ ---
 router.post('/orders/mergeTables', mergeTable);
+
 
 module.exports = router;

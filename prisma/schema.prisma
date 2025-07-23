@@ -211,46 +211,82 @@ model ImportDetail {
   @@map("import_details")
 }
 
+
 model TableGroup {
   id        Int      @id @default(autoincrement())
-  tables    Table[]
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+  tables    Table[]
+  orders    Order[]
+}
+
+model Reservation {
+  id              Int                @id @default(autoincrement())
+  customer        Customer           @relation(fields: [customerId], references: [id])
+  customerId      Int
+  reservationTime DateTime
+  status          String             @default("pending")
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
+
+  reservationTables ReservationTable[]
+
+  @@map("reservations")
 }
 
 model Table {
-  id           Int           @id @default(autoincrement())
-  table_number Int
-  mergedName   String? // <-- ชื่อที่ใช้แสดงกรณีโต๊ะรวม
-  status       String        @default("ວ່າງ")
-  seat         Int
-  createdAt    DateTime      @default(now())
-  updatedAt    DateTime      @updatedAt
-  Reservation  Reservation[]
-  Order        Order[]
-  groupId      Int?
-  group        TableGroup?   @relation(fields: [groupId], references: [id])
-
-  @@map("tables")
+  id            Int                @id @default(autoincrement())
+  table_number  Int
+  seat          Int
+  status        String
+  groupId       Int?
+  group         TableGroup?        @relation(fields: [groupId], references: [id])
+  orders        Order[]
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+  mergedFromIds   String?          // เก็บเฉพาะตอนเป็นโต๊ะหลัก เช่น "2,3"
+  reservationTables ReservationTable[]
 }
+
+model ReservationTable {
+  reservationId Int
+  tableId       Int
+
+  reservation   Reservation @relation(fields: [reservationId], references: [id])
+  table         Table       @relation(fields: [tableId], references: [id])
+
+  @@id([reservationId, tableId])
+  @@map("reservation_tables")
+}
+
 
 model Order {
   id             Int            @id @default(autoincrement())
-  empId          Int? // <- ปรับให้ nullable
+  empId          Int?         
   employee       Employee?      @relation(fields: [empId], references: [id])
-  table          Table          @relation(fields: [tableId], references: [id], onDelete: Cascade)
+
   tableId        Int
+  table          Table          @relation(fields: [tableId], references: [id], onDelete: Cascade)
+
+  // เพิ่มการเชื่อมโยงกับกลุ่มโต๊ะ
+  tableGroupId   Int?
+  tableGroup     TableGroup?    @relation(fields: [tableGroupId], references: [id])
+
   orderDate      DateTime       @default(now())
   total_price    Float
   billStatus     BillStatus     @default(OPEN)
   payment_method PaymentMethod?
-  mergedFromIds  String? // เก็บรหัสโต๊ะที่ถูกรวมมา (เช่น "3,5")
+  mergedFromIds  String?        // ເກັບ ID ໂຕະທີ່ຖືກລວມ (ເຊັ່ນ "3,5")
+  paidAt         DateTime?      
   createdAt      DateTime       @default(now())
   updatedAt      DateTime       @updatedAt
+
   orderRounds    OrderRound[]
 
   @@map("orders")
 }
+
+
 
 model OrderRound {
   id            Int           @id @default(autoincrement())
@@ -295,16 +331,3 @@ model Customer {
   @@map("customers")
 }
 
-model Reservation {
-  id              Int      @id @default(autoincrement())
-  customer        Customer @relation(fields: [customerId], references: [id])
-  customerId      Int
-  table           Table    @relation(fields: [tableId], references: [id])
-  tableId         Int
-  reservationTime DateTime
-  status          String   @default("pending")
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
-
-  @@map("reservations")
-}

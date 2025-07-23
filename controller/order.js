@@ -67,150 +67,140 @@ const prepareAndValidateDetails = async (orderDetails) => {
 // =================================================================
 exports.addOrderToTable = async (req, res) => {
     try {
-        const { empId, tableId, orderDetails } = req.body;
+        const { empId, tableIds, orderDetails } = req.body;
 
-        if (!empId || !tableId || !orderDetails || !Array.isArray(orderDetails)) {
-            return res.status(400).json({ message: "ต้องระบุรหัสพนักงาน, รหัสโต๊ะ และรายละเอียดออเดอร์" });
+        if (!empId || !Array.isArray(tableIds) || tableIds.length === 0 || !Array.isArray(orderDetails) || orderDetails.length === 0) {
+            return res.status(400).json({ message: "ข้อมูลไม่ครบถ้วน" });
         }
 
-        const validItems = orderDetails.filter(d => d && (d.foodId || d.productUnitId));
-        if (validItems.length === 0) {
-            return res.status(400).json({ message: "ไม่มีรายการที่ถูกต้องในรายละเอียดออเดอร์" });
+        // กรองรายการที่ถูกต้อง
+        const validDetails = orderDetails.filter(item => item && (item.foodId || item.productUnitId));
+        if (validDetails.length === 0) {
+            return res.status(400).json({ message: "ไม่มีรายการอาหารหรือเครื่องดื่มที่ถูกต้อง" });
         }
 
-        const validatedDetails = await prepareAndValidateDetails(validItems);
-        const newItemsTotalPrice = validatedDetails.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+        // เตรียมข้อมูล + ราคา
+        const preparedDetails = await Promise.all(validDetails.map(async (item) => {
+            if (item.foodId) {
+                const food = await prisma.food.findUnique({ where: { id: item.foodId } });
+                if (!food) throw new Error(`ไม่พบอาหาร id ${item.foodId}`);
+                return { ...item, price: food.price };
+            } else if (item.productUnitId) {
+                const pu = await prisma.productUnit.findUnique({ where: { id: item.productUnitId } });
+                if (!pu) throw new Error(`ไม่พบหน่วยสินค้า id ${item.productUnitId}`);
+                return { ...item, price: pu.price };
+            }
+            return item;
+        }));
 
-        // ตรวจสอบสต็อกเครื่องดื่ม
-        const stockRequirements = new Map();
-        const productUnitIdsForStockCheck = validatedDetails.filter(d => d.productUnitId).map(d => d.productUnitId);
+        const totalPrice = preparedDetails.reduce((sum, i) => sum + (i.price * i.quantity), 0);
 
-        if (productUnitIdsForStockCheck.length > 0) {
-            const productUnitsFromDb = await prisma.productUnit.findMany({
-                where: { id: { in: productUnitIdsForStockCheck } },
-                select: { id: true, drinkId: true, baseItemsCount: true }
+        // โต๊ะหลัก
+        const mainTableId = parseInt(tableIds[0]);
+        const mergedFromIdsStr = tableIds.join(' + ');
+
+        // ตรวจสอบว่าโต๊ะหลักมีอยู่จริง
+        const mainTable = await prisma.table.findUnique({ where: { id: mainTableId } });
+        if (!mainTable) {
+            return res.status(404).json({ message: "ไม่พบโต๊ะหลัก" });
+        }
+
+        // หาว่ามี order ที่เปิดอยู่หรือยัง
+        let order = await prisma.order.findFirst({
+            where: {
+                tableId: mainTableId,
+                billStatus: BillStatus.OPEN
+            }
+        });
+
+        if (!order) {
+            order = await prisma.order.create({
+                data: {
+                    empId: parseInt(empId),
+                    tableId: mainTableId,
+                    total_price: totalPrice,
+                    billStatus: BillStatus.OPEN,
+                    mergedFromIds: mergedFromIdsStr
+                }
             });
-            const productUnitMap = new Map(productUnitsFromDb.map(p => [p.id, p]));
-            for (const detail of validatedDetails) {
-                if (detail.productUnitId) {
-                    const unitInfo = productUnitMap.get(detail.productUnitId);
-                    if (unitInfo) {
-                        const quantityNeeded = detail.quantity * unitInfo.baseItemsCount;
-                        stockRequirements.set(unitInfo.drinkId, (stockRequirements.get(unitInfo.drinkId) || 0) + quantityNeeded);
+        } else {
+            order = await prisma.order.update({
+                where: { id: order.id },
+                data: {
+                    total_price: { increment: totalPrice },
+                    empId: parseInt(empId),
+                    mergedFromIds: mergedFromIdsStr
+                }
+            });
+        }
+
+        // สร้างรอบใหม่
+        const lastRound = await prisma.orderRound.findFirst({
+            where: { orderId: order.id },
+            orderBy: { roundNumber: 'desc' }
+        });
+
+        const roundNumber = lastRound ? lastRound.roundNumber + 1 : 1;
+
+        const orderRound = await prisma.orderRound.create({
+            data: {
+                orderId: order.id,
+                roundNumber
+            }
+        });
+
+        // เพิ่ม orderDetails
+        for (const item of preparedDetails) {
+            await prisma.orderDetail.create({
+                data: {
+                    orderRoundId: orderRound.id,
+                    foodId: item.foodId || null,
+                    productUnitId: item.productUnitId || null,
+                    quantity: item.quantity,
+                    price: item.price,
+                    itemType: item.itemType // ✅ เพิ่ม itemType ตรงนี้
+                }
+            });
+        }
+
+
+        // อัปเดตโต๊ะทั้งหมดที่ถูกรวม
+        await Promise.all(tableIds.map(id =>
+            prisma.table.update({
+                where: { id: parseInt(id) },
+                data: {
+                    status: "ກຳລັງໃຊ້ງານ",
+                    mergedFromIds: mergedFromIdsStr
+                }
+            })
+        ));
+
+        // ส่งข้อมูล order เต็มกลับ
+        const fullOrder = await prisma.order.findUnique({
+            where: { id: order.id },
+            include: {
+                employee: true,
+                table: true,
+                orderRounds: {
+                    orderBy: { roundNumber: 'asc' },
+                    include: {
+                        orderDetails: {
+                            include: {
+                                food: true,
+                                productUnit: {
+                                    include: { drink: true }
+                                }
+                            }
+                        }
                     }
                 }
             }
-        }
+        });
 
-        if (stockRequirements.size > 0) {
-            const drinkIds = Array.from(stockRequirements.keys());
-            const drinksInStock = await prisma.drink.findMany({
-                where: { id: { in: drinkIds } },
-                select: { id: true, name: true, qty: true }
-            });
-            for (const drink of drinksInStock) {
-                if (drink.qty <= 0) {
-                    return res.status(400).json({ message: `ເຄື່ອງດື່ມນີ້ໝົດສະຕ໊ອກ! (${drink.name})` });
-                }
-                const requiredQty = stockRequirements.get(drink.id);
-                if (drink.qty < requiredQty) {
-                    return res.status(400).json({ message: `ສິນຄ້າໃນຄັງບໍ່ພຽງພໍ (${drink.name}). ຕ້ອງການ: ${requiredQty}, ມີຢູ່: ${drink.qty}` });
-                }
-            }
-        }
-
-        const parsedTableId = parseInt(tableId, 10);
-        const parsedEmpId = parseInt(empId, 10);
-
-        // ดึงข้อมูลโต๊ะเพื่อเช็ค mergedName
-        const tableInfo = await prisma.table.findUnique({ where: { id: parsedTableId } });
-        const mergedFromIdsStr = tableInfo?.mergedName || null;  // ถ้าโต๊ะถูกรวม จะมี mergedName
-
-        // Transaction สร้าง/อัปเดต Order + ตัดสต็อก + อัปเดตสถานะโต๊ะและการจอง
-        const resultOrder = await prisma.$transaction(async (tx) => {
-            let mainOrder = await tx.order.findFirst({
-                where: { tableId: parsedTableId, billStatus: BillStatus.OPEN },
-            });
-
-            if (!mainOrder) {
-                mainOrder = await tx.order.create({
-                    data: {
-                        empId: parsedEmpId,
-                        tableId: parsedTableId,
-                        total_price: newItemsTotalPrice,
-                        billStatus: BillStatus.OPEN,
-                        mergedFromIds: mergedFromIdsStr,  // บันทึก mergedName (merge info) ลง order ด้วย
-                    }
-                });
-            } else {
-                mainOrder = await tx.order.update({
-                    where: { id: mainOrder.id },
-                    data: { total_price: { increment: newItemsTotalPrice }, empId: parsedEmpId, mergedFromIds: mergedFromIdsStr }
-                });
-            }
-
-            const lastRound = await tx.orderRound.findFirst({
-                where: { orderId: mainOrder.id },
-                orderBy: { roundNumber: 'desc' }
-            });
-            const nextRoundNumber = (lastRound?.roundNumber || 0) + 1;
-
-            const containsFood = validatedDetails.some(detail => detail.foodId);
-            const initialKitchenStatus = containsFood ? KitchenStatus.PENDING : KitchenStatus.SERVED;
-
-            const newOrderRound = await tx.orderRound.create({
-                data: {
-                    orderId: mainOrder.id,
-                    roundNumber: nextRoundNumber,
-                    kitchenStatus: initialKitchenStatus
-                }
-            });
-
-            const detailCreations = validatedDetails.map(detail => tx.orderDetail.create({
-                data: {
-                    orderRoundId: newOrderRound.id,
-                    foodId: detail.foodId,
-                    productUnitId: detail.productUnitId,
-                    quantity: detail.quantity,
-                    price: detail.price,
-                    itemType: detail.itemType
-                }
-            }));
-            await Promise.all(detailCreations);
-
-            if (stockRequirements.size > 0) {
-                const stockUpdates = Array.from(stockRequirements.entries()).map(([drinkId, qty]) =>
-                    tx.drink.update({
-                        where: { id: drinkId },
-                        data: { qty: { decrement: qty } }
-                    })
-                );
-                await Promise.all(stockUpdates);
-            }
-
-            await tx.table.update({ where: { id: parsedTableId }, data: { status: 'ກຳລັງໃຊ້ງານ' } });
-
-            // อัปเดตสถานะการจองจาก 'pending' เป็น 'confirmed'
-            const existingPendingReservation = await tx.reservation.findFirst({
-                where: { tableId: parsedTableId, status: 'pending' },
-                orderBy: { reservationTime: 'asc' }
-            });
-
-            if (existingPendingReservation) {
-                await tx.reservation.update({
-                    where: { id: existingPendingReservation.id },
-                    data: { status: 'confirmed' }
-                });
-            }
-
-            return tx.order.findUnique({ where: { id: mainOrder.id }, include: FULL_ORDER_INCLUDE });
-        }, { timeout: 15000 });
-
-        res.status(201).json(resultOrder);
-
+        return res.status(201).json({ message: "เพิ่มรายการออเดอร์สำเร็จ", order: fullOrder });
     } catch (error) {
-        console.error("เกิดข้อผิดพลาดในการสร้างออเดอร์:", error);
-        res.status(500).json({ message: "เกิดข้อผิดพลาดของเซิร์ฟเวอร์", error: error.message });
+        console.error("addOrderToTable error:", error);
+        return res.status(500).json({ message: "เกิดข้อผิดพลาดในระบบ", error: error.message });
     }
 };
 
@@ -219,68 +209,78 @@ exports.addOrderToTable = async (req, res) => {
 // 2. ชำระเงิน / ปิดบิล (นำการตัดสต็อกออก)
 // =================================================================
 exports.checkoutOrder = async (req, res) => {
+    const { orderId } = req.params;
+    const { payment_method } = req.body; // 'CASH' หรือ 'TRANSFER'
+
     try {
-        const { orderId } = req.params;
-        const { paymentMethod } = req.body;
+        const order = await prisma.order.findUnique({
+            where: { id: parseInt(orderId) },
+            include: { table: true },
+        });
 
-        if (!paymentMethod || !Object.values(PaymentMethod).includes(paymentMethod)) {
-            return res.status(400).json({ message: "วิธีการชำระเงินไม่ถูกต้อง" });
-        }
+        if (!order) throw new Error("ไม่พบออเดอร์");
 
-        const parsedOrderId = parseInt(orderId, 10);
+        const mergedFromIds = order.mergedFromIds
+            ? order.mergedFromIds
+                .split(' + ')
+                .map(id => parseInt(id.trim()))
+                .filter(id => !isNaN(id))
+            : [];
 
-        const updatedOrder = await prisma.$transaction(async (tx) => {
-            const currentOrder = await tx.order.findUnique({
-                where: { id: parsedOrderId },
-                include: { table: true }
-            });
-
-            if (!currentOrder || currentOrder.billStatus !== BillStatus.OPEN) {
-                throw new Error("ไม่พบออเดอร์หรือออเดอร์ไม่ได้อยู่ในสถานะ OPEN");
-            }
-
-            if (currentOrder.tableId) {
-                await tx.table.update({
-                    where: { id: currentOrder.tableId },
-                    data: { status: 'ວ່າງ' }
+        await prisma.$transaction(async (tx) => {
+            // ✅ เคลียร์สถานะโต๊ะที่ถูกรวม
+            if (mergedFromIds.length > 0) {
+                await tx.table.updateMany({
+                    where: { id: { in: mergedFromIds } },
+                    data: {
+                        status: "ວ່າງ",
+                        mergedFromIds: null,
+                        groupId: null
+                    },
                 });
             }
 
-            const orderResult = await tx.order.update({
-                where: { id: parsedOrderId },
+            // ✅ เคลียร์สถานะโต๊ะหลัก
+            await tx.table.update({
+                where: { id: order.tableId },
                 data: {
-                    billStatus: BillStatus.PAID,
-                    payment_method: paymentMethod,
+                    status: "ວ່າງ",
+                    mergedFromIds: null,
+                    groupId: null
                 },
-                include: FULL_ORDER_INCLUDE
             });
 
-            // เปลี่ยนสถานะการจองเป็น 'cancelled'
-            const existingReservation = await tx.reservation.findFirst({
-                where: {
-                    tableId: currentOrder.tableId,
-                    status: { notIn: ['cancelled', 'completed'] }
-                },
-                orderBy: { reservationTime: 'asc' }
-            });
-
-            if (existingReservation) {
-                await tx.reservation.update({
-                    where: { id: existingReservation.id },
-                    data: { status: 'cancelled' }
+            // ✅ ลบ TableGroup ถ้ามี
+            if (order.table.groupId) {
+                await tx.tableGroup.delete({
+                    where: { id: order.table.groupId },
                 });
             }
 
-            return orderResult;
-        }, { timeout: 20000 });
+            // ✅ อัปเดตสถานะบิล
+            await tx.order.update({
+                where: { id: order.id },
+                data: {
+                    billStatus: 'PAID',
+                    paidAt: new Date(),
+                    payment_method,
+                    // mergedFromIds: null,
+                },
+            });
+        }, {
+            timeout: 30000,
+            maxWait: 10000,
+        });
 
-        res.json({ message: "ชำระเงินออเดอร์สำเร็จและอัปเดตสถานะโต๊ะแล้ว", order: updatedOrder });
-
+        res.json({
+            message: 'ການຊຳລະເງິນສຳເລັດແລ້ວ!!!',
+        });
     } catch (error) {
-        console.error("เกิดข้อผิดพลาดในการชำระเงินออเดอร์:", error);
-        res.status(500).json({ message: "เกิดข้อผิดพลาดของเซิร์ฟเวอร์ระหว่างการชำระเงิน", error: error.message });
+        console.error("Checkout Error:", error);
+        res.status(500).json({ error: error.message });
     }
 };
+
 
 // =================================================================
 // 3. ยกเลิกออเดอร์ พร้อมคืนสต็อก
@@ -395,22 +395,61 @@ exports.getAllOrders = async (req, res) => {
 
 // =================================================================
 // 6. ดึงข้อมูลออเดอร์ตาม ID
-// =================================================================
+// =================================================================exports.getOrderById = async (req, res) => {
 exports.getOrderById = async (req, res) => {
     try {
         const { id } = req.params;
+        const orderId = parseInt(id, 10);
+
+        if (isNaN(orderId)) {
+            return res.status(400).json({ message: "ID ບໍ່ຖືກຕ້ອງ" });
+        }
+
         const order = await prisma.order.findUnique({
-            where: { id: parseInt(id, 10) },
-            include: FULL_ORDER_INCLUDE
+            where: {
+                id: orderId,
+            },
+            include: {
+                employee: true,
+                table: {
+                    include: {
+                        group: { // ✅ ใช้ group แทน tableGroup
+                            include: {
+                                tables: true, // ✅ ดึงโต๊ะที่ถูกรวมใน group เดียวกัน
+                            }
+                        }
+                    }
+                },
+                orderRounds: {
+                    orderBy: { roundNumber: 'asc' },
+                    include: {
+                        orderDetails: {
+                            include: {
+                                food: true,
+                                productUnit: {
+                                    include: {
+                                        drink: true
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         });
 
-        if (!order) return res.status(404).json({ message: "Order not found" });
-        res.json(order);
+        if (!order) {
+            return res.status(404).json({ message: "ບໍ່ພົບອໍເດີ" });
+        }
+
+        return res.json(order);
     } catch (error) {
         console.error("Error fetching order by ID:", error);
-        res.status(500).json({ message: "Server Error fetching order", error: error.message });
+        return res.status(500).json({ message: "ເກີດຂໍ້ຜິດພາດການດຶງຂໍ້ມູນອໍເດີ" });
     }
 };
+
+
 
 // =================================================================
 // 7. ดึงข้อมูลออเดอร์ที่เปิดอยู่ (OPEN) ตาม Table ID
@@ -543,98 +582,48 @@ exports.moveTable = async (req, res) => {
 // =================================================================
 exports.mergeTable = async (req, res) => {
     try {
-        const { tableIds } = req.body;
+        const { tableIds } = req.body; // รับเป็น array เช่น [34, 35, 36]
 
-        if (!tableIds || !Array.isArray(tableIds) || tableIds.length < 2) {
-            return res.status(400).json({ message: "ต้องเลือกโต๊ะอย่างน้อย 2 โต๊ะเพื่อรวม" });
+        if (!Array.isArray(tableIds) || tableIds.length < 2) {
+            return res.status(400).json({ message: "ต้องเลือกโต๊ะ 2 ตัวขึ้นไปในการรวมโต๊ะ" });
         }
 
+        // ตรวจสอบโต๊ะที่ส่งมาว่ามีอยู่จริงไหม
         const tables = await prisma.table.findMany({
-            where: { id: { in: tableIds } }
+            where: {
+                id: { in: tableIds }
+            }
         });
 
         if (tables.length !== tableIds.length) {
-            return res.status(404).json({ message: "โต๊ะที่เลือกบางโต๊ะไม่พบในระบบ" });
+            return res.status(404).json({ message: "โต๊ะบางตัวไม่พบในระบบ" });
         }
 
-        const hasUnavailable = tables.some(t => t.status !== "ວ່າງ");
-        if (hasUnavailable) {
-            return res.status(400).json({ message: "ไม่สามารถรวมโต๊ะที่ไม่ว่างได้" });
-        }
-
-        const mainTableId = tableIds[0];
-        const otherTableIds = tableIds.slice(1);
-        const mergedFromIdsStr = tableIds.join(',');
-
-        const mergedName = tables
-            .map(t => (t.name ? t.name : `ໂຕະ ${t.table_number}`))
-            .join('+ ');
-
-        // หา order โต๊ะหลัก หรือสร้างใหม่ถ้ายังไม่มี
-        let mainOrder = await prisma.order.findFirst({
-            where: {
-                tableId: mainTableId,
-                billStatus: BillStatus.OPEN
-            }
+        // สร้าง TableGroup ใหม่
+        const newGroup = await prisma.tableGroup.create({
+            data: {}
         });
 
-        if (!mainOrder) {
-            mainOrder = await prisma.order.create({
-                data: {
-                    tableId: mainTableId,
-                    total_price: 0,
-                    billStatus: BillStatus.OPEN,
-                    mergedFromIds: mergedFromIdsStr
-                }
-            });
-        } else {
-            await prisma.order.update({
-                where: { id: mainOrder.id },
-                data: { mergedFromIds: mergedFromIdsStr }
-            });
-        }
+        // อัปเดตโต๊ะทั้งหมด ให้ชี้ groupId เป็น TableGroup ใหม่ และสถานะเป็น "ຖືກລວມ"
+        await Promise.all(
+            tableIds.map(tableId =>
+                prisma.table.update({
+                    where: { id: tableId },
+                    data: {
+                        groupId: newGroup.id,
+                        status: "ຖືກລວມ",
+                    },
+                })
+            )
+        );
 
-        // ย้าย order โต๊ะอื่นให้เข้ามาอยู่ในโต๊ะหลัก
-        await prisma.order.updateMany({
-            where: {
-                tableId: { in: otherTableIds },
-                billStatus: BillStatus.OPEN
-            },
-            data: {
-                tableId: mainTableId
-            }
-        });
-
-        // ✅ อัปเดตโต๊ะหลัก (มีชื่อ merge เต็ม)
-        await prisma.table.update({
-            where: { id: mainTableId },
-            data: {
-                status: "ຖືກລວມ",
-                mergedName: mergedName
-            }
-        });
-
-        // ✅ อัปเดตโต๊ะอื่น ๆ (มี mergedName = "ຖືກລວມຢູ່")
-        await prisma.table.updateMany({
-            where: { id: { in: otherTableIds } },
-            data: {
-                status: "ຖືກລວມ",
-                mergedName: "ຖືກລວມຢູ່"
-            }
-        });
-
-        return res.json({
-            message: "รวมโต๊ะสำเร็จ",
-            mainOrderId: mainOrder.id,
-            mainTableId: mainTableId,
-            mergedName: mergedName
-        });
-
+        return res.json({ message: "รวมโต๊ะสำเร็จ", groupId: newGroup.id });
     } catch (error) {
-        console.error("Error merging tables:", error);
-        return res.status(500).json({ message: "Server Error", error: error.message });
+        console.error("mergeTable error:", error);
+        return res.status(500).json({ message: "เกิดข้อผิดพลาดในการรวมโต๊ะ" });
     }
 };
+
 
 
 exports.getIncomeExpenseReport = async (req, res) => {
@@ -735,9 +724,9 @@ exports.getIncomeExpenseReport = async (req, res) => {
 
 
 // ยกเลิกเฉพาะรายการอาหาร
+
 exports.cancelOrderDetail = async (req, res) => {
     const { id } = req.params;
-
 
     if (!id) {
         return res.status(400).json({ message: "Missing order detail id parameter" });
@@ -751,11 +740,19 @@ exports.cancelOrderDetail = async (req, res) => {
     try {
         const orderDetail = await prisma.orderDetail.findUnique({
             where: { id: parsedId },
+            include: {
+                orderRound: {
+                    select: {
+                        orderId: true,
+                    },
+                },
+                food: { // <--- ADD THIS
+                    select: {
+                        name: true, // <--- Select the food name
+                    },
+                },
+            },
         });
-        const orderId = await prisma.order.findUnique({
-            where: { id: Number(id) },
-        })
-
 
         if (!orderDetail) {
             return res.status(404).json({ message: 'ບໍ່ພົບລາຍການອາຫານນີ້' });
@@ -769,15 +766,25 @@ exports.cancelOrderDetail = async (req, res) => {
             where: { id: parsedId },
             data: {
                 status: 'CANCELLED',
-                cancelReason: 'ວັດຖຸດິບໝົດ!',
+                cancelReason: 'ວັດຖุดິບໝົດ!',
             },
         });
 
+        // Determine the item name based on its type
+        let itemName = '';
+        if (orderDetail.itemType === 'FOOD' && orderDetail.food) {
+            itemName = orderDetail.food.name;
+        } else if (orderDetail.itemType === 'DRINK' && orderDetail.productUnit) {
+            itemName = orderDetail.productUnit.name;
+        }
+
+
         // ✅ แจ้งเตือนแบบ real-time ไปยังพนักงานทุกคน
         global.io.emit('orderItemCancelled', {
-            message: 'ລາຍການຖືກຍົກເລີກ',
-            orderNumber: orderId,
+            message: 'รายการอาหารถูกยกเลิก',
             orderDetailId: parsedId,
+            orderId: orderDetail.orderRound.orderId,
+            itemName: itemName, // <--- ADD THIS LINE
             reason: 'ວັດຖຸດິບໝົດ!',
         });
 
@@ -787,8 +794,7 @@ exports.cancelOrderDetail = async (req, res) => {
         });
 
     } catch (error) {
-        console.error('ຍົກເລີກລາຍການອາຫານລົ້ມເຫຼວ:', error);
-        res.status(500).json({ message: 'ເກີດຂໍ້ຜິດພາດໃນການຍົກເລີກອາຫານ!' });
+        console.error('ຍົກເລີກລາຍการอาหารล้มเหลว:', error);
+        res.status(500).json({ message: 'เกิดข้อผิดพลาดในการยกเลิกอาหาร!' });
     }
 };
-
