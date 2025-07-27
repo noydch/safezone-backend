@@ -3,23 +3,39 @@ const prisma = new PrismaClient();
 
 exports.createReservation = async (req, res) => {
     try {
-        const { customerData, tableIds, reservationTime } = req.body;
+        const { customerData, reservationTime } = req.body;
+        let tableIds = req.body.tableIds;
 
-        if (!customerData || !tableIds || !Array.isArray(tableIds) || tableIds.length === 0 || !reservationTime) {
-            return res.status(400).json({ message: "Missing required fields or invalid tableIds" });
+        // 👇 รองรับ tableId เดี่ยว (เช่น tableId: 1)
+        if (!tableIds && typeof req.body.tableId === 'number') {
+            tableIds = [req.body.tableId];
         }
+
+        // ✅ ตรวจสอบค่าที่ส่งมา
+        console.log("📥 Request Body:", req.body);
+        console.log("🧾 customerData:", customerData);
+        console.log("🪑 tableIds:", tableIds);
+        console.log("🕒 reservationTime:", reservationTime);
+
+        // ✅ ตรวจสอบความถูกต้องของ input
+        if (!customerData) return res.status(400).json({ message: "customerData is required" });
+        if (!tableIds || !Array.isArray(tableIds) || tableIds.length === 0) {
+            return res.status(400).json({ message: "tableIds must be a non-empty array" });
+        }
+        if (!reservationTime) return res.status(400).json({ message: "reservationTime is required" });
 
         const parsedDate = new Date(reservationTime);
         if (isNaN(parsedDate)) {
             return res.status(400).json({ message: "Invalid reservationTime format" });
         }
 
+        // ✅ หาเวลาเริ่มและจบของวันนั้น
         const startOfDay = new Date(parsedDate);
         startOfDay.setHours(0, 0, 0, 0);
         const endOfDay = new Date(parsedDate);
         endOfDay.setHours(23, 59, 59, 999);
 
-        // ตรวจสอบโต๊ะที่ถูกจองในวันเดียวกัน
+        // ✅ ตรวจสอบว่าโต๊ะที่เลือกถูกจองแล้วในวันนั้นหรือไม่
         const conflictedReservations = await prisma.reservationTable.findMany({
             where: {
                 tableId: { in: tableIds },
@@ -33,6 +49,8 @@ exports.createReservation = async (req, res) => {
             include: { reservation: true }
         });
 
+        console.log("⚠️ Conflicted Reservations:", conflictedReservations);
+
         if (conflictedReservations.length > 0) {
             const conflictedTableIds = [...new Set(conflictedReservations.map(r => r.tableId))];
             return res.status(409).json({
@@ -40,18 +58,21 @@ exports.createReservation = async (req, res) => {
             });
         }
 
-        // Transaction
-        const { customer, reservation, updatedTables } = await prisma.$transaction(async (tx) => {
-            // หา หรือ สร้างลูกค้า
+        // ✅ เริ่ม transaction
+        const result = await prisma.$transaction(async (tx) => {
+            // 👉 หา หรือ สร้างลูกค้า
             let existingCustomer = await tx.customer.findUnique({
                 where: { phone: customerData.phone }
             });
 
             if (!existingCustomer) {
                 existingCustomer = await tx.customer.create({ data: customerData });
+                console.log("👤 Created new customer:", existingCustomer);
+            } else {
+                console.log("👤 Found existing customer:", existingCustomer);
             }
 
-            // สร้าง reservation
+            // 👉 สร้าง reservation
             const reservation = await tx.reservation.create({
                 data: {
                     reservationTime: parsedDate,
@@ -60,17 +81,21 @@ exports.createReservation = async (req, res) => {
                 }
             });
 
-            // สร้าง ReservationTable สำหรับทุกโต๊ะ
+            console.log("📅 Created reservation:", reservation);
+
+            // 👉 สร้าง ReservationTable
+            const reservationTableRecords = [];
             for (const tableId of tableIds) {
-                await tx.reservationTable.create({
+                const rt = await tx.reservationTable.create({
                     data: {
                         reservationId: reservation.id,
                         tableId
                     }
                 });
+                reservationTableRecords.push(rt);
             }
 
-            // อัปเดตสถานะโต๊ะ
+            // 👉 อัปเดตสถานะโต๊ะ
             const updatedTables = [];
             for (const tableId of tableIds) {
                 const updated = await tx.table.update({
@@ -80,25 +105,30 @@ exports.createReservation = async (req, res) => {
                 updatedTables.push(updated);
             }
 
-            return { customer: existingCustomer, reservation, updatedTables };
+            return {
+                customer: existingCustomer,
+                reservation,
+                reservationTableRecords,
+                updatedTables
+            };
         });
 
+        // ✅ ตอบกลับ
         res.status(201).json({
             message: "Reservation created successfully",
-            customer,
-            reservation,
-            updatedTables
+            customer: result.customer,
+            reservation: result.reservation,
+            tables: result.updatedTables
         });
 
     } catch (error) {
-        console.error("Create reservation error:", error);
+        console.error("❌ Create reservation error:", error);
         if (error.code === 'P2002') {
             return res.status(409).json({ message: "Duplicate entry detected." });
         }
         res.status(500).json({ message: "Internal server error" });
     }
 };
-
 // 📌 GET ALL RESERVATIONS
 // ตัวอย่าง getAllReservations
 exports.getAllReservations = async (req, res) => {

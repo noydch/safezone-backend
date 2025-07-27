@@ -4,13 +4,20 @@ const bcrypt = require('bcryptjs')
 
 exports.getEmployee = async (req, res) => {
     try {
-        // await
-        const employee = await prisma.employee.findMany()
-        res.send(employee)
+        const { role } = req.query;
+
+        // ถ้า role ไม่มีหรือเป็นค่าว่าง ให้ไม่ filter role
+        const employees = await prisma.employee.findMany({
+            where: role ? { role } : {},
+        });
+
+        res.json(employees);
     } catch (error) {
-        console.log(error);
+        console.error(error);
+        res.status(500).json({ message: 'เกิดข้อผิดพลาด' });
     }
-}
+};
+
 
 exports.delEmployee = async (req, res) => {
     try {
@@ -27,38 +34,24 @@ exports.delEmployee = async (req, res) => {
 
 exports.updateEmployee = async (req, res) => {
     try {
-        const { id } = req.params
-        const {
-            email,
-            password,
-            role
-        } = req.body;
+        const { password, ...otherFields } = req.body;
 
+        let updateData = { ...otherFields };
 
-        // hash password
-        const hashPassword = await bcrypt.hash(password, 10)
-        console.log(hashPassword);
+        if (password && password.trim() !== '') {
+            const saltRounds = 10;
+            const hashedPassword = await bcrypt.hash(password, saltRounds);
+            updateData.password = hashedPassword;
+        }
 
-        const employee = await prisma.employee.update({
-            where: {
-                id: parseInt(id)
-            },
-            data: {
-                email: email,
-                password: hashPassword,
-                role: role
-            }
-        })
+        const updatedEmployee = await prisma.employee.update({
+            where: { id: parseInt(req.params.id) },
+            data: updateData,
+        });
 
-
-        res.json({
-            message: "Update is seccessful!!!",
-            employee
-        })
+        res.json(updatedEmployee);
     } catch (error) {
-        console.log(error);
-        res.status(500).json({
-            message: "Server Error"
-        })
+        console.error(error);
+        res.status(500).json({ message: 'Server error' });
     }
-}
+};
