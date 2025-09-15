@@ -61,19 +61,19 @@ exports.createReservation = async (req, res) => {
         // ✅ เริ่ม transaction
         const result = await prisma.$transaction(async (tx) => {
             // 👉 หา หรือ สร้างลูกค้า
-            let existingCustomer = await tx.customer.findUnique({
+            let existingCustomer = await prisma.customer.findUnique({
                 where: { phone: customerData.phone }
             });
 
             if (!existingCustomer) {
-                existingCustomer = await tx.customer.create({ data: customerData });
+                existingCustomer = await prisma.customer.create({ data: customerData });
                 console.log("👤 Created new customer:", existingCustomer);
             } else {
                 console.log("👤 Found existing customer:", existingCustomer);
             }
 
             // 👉 สร้าง reservation
-            const reservation = await tx.reservation.create({
+            const reservation = await prisma.reservation.create({
                 data: {
                     reservationTime: parsedDate,
                     status: "pending",
@@ -86,7 +86,7 @@ exports.createReservation = async (req, res) => {
             // 👉 สร้าง ReservationTable
             const reservationTableRecords = [];
             for (const tableId of tableIds) {
-                const rt = await tx.reservationTable.create({
+                const rt = await prisma.reservationTable.create({
                     data: {
                         reservationId: reservation.id,
                         tableId
@@ -98,7 +98,7 @@ exports.createReservation = async (req, res) => {
             // 👉 อัปเดตสถานะโต๊ะ
             const updatedTables = [];
             for (const tableId of tableIds) {
-                const updated = await tx.table.update({
+                const updated = await prisma.table.update({
                     where: { id: tableId },
                     data: { status: 'ຖືກຈອງແລ້ວ' }
                 });
@@ -192,7 +192,7 @@ exports.updateReservationStatus = async (req, res) => {
         }
 
         const updatedReservation = await prisma.$transaction(async (tx) => {
-            const reservation = await tx.reservation.findUnique({
+            const reservation = await prisma.reservation.findUnique({
                 where: { id: Number(id) },
                 include: { reservationTables: true }
             });
@@ -201,7 +201,7 @@ exports.updateReservationStatus = async (req, res) => {
                 throw new Error('ReservationNotFound');
             }
 
-            const updated = await tx.reservation.update({
+            const updated = await prisma.reservation.update({
                 where: { id: Number(id) },
                 data: { status },
                 include: { customer: true, reservationTables: { include: { table: true } } }
@@ -210,7 +210,7 @@ exports.updateReservationStatus = async (req, res) => {
             // ถ้าสถานะเป็น cancelled หรือ completed ให้ตั้งสถานะโต๊ะเป็น "ວ່າງ"
             if (['cancelled', 'completed'].includes(status)) {
                 for (const rt of reservation.reservationTables) {
-                    await tx.table.update({
+                    await prisma.table.update({
                         where: { id: rt.tableId },
                         data: { status: 'ວ່າງ' }
                     });
@@ -249,18 +249,18 @@ exports.deleteReservation = async (req, res) => {
 
         await prisma.$transaction(async (tx) => {
             // ลบ reservationTable ทั้งหมดก่อน
-            await tx.reservationTable.deleteMany({
+            await prisma.reservationTable.deleteMany({
                 where: { reservationId: Number(id) }
             });
 
             // ลบ reservation
-            await tx.reservation.delete({
+            await prisma.reservation.delete({
                 where: { id: Number(id) }
             });
 
             // อัปเดตสถานะโต๊ะทั้งหมดที่เกี่ยวข้องเป็น ว่าง
             for (const rt of reservation.reservationTables) {
-                await tx.table.update({
+                await prisma.table.update({
                     where: { id: rt.tableId },
                     data: { status: 'ວ່າງ' }
                 });

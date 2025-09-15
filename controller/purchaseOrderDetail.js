@@ -7,12 +7,12 @@ const prisma = require('../config/prisma');
  * @param {number} poId - The ID of the Purchase Order to update.
  */
 async function updatePurchaseOrderTotal(tx, poId) {
-    const details = await tx.purchaseOrderDetail.findMany({
+    const details = await prisma.purchaseOrderDetail.findMany({
         where: { poId: Number(poId) }
     });
     const newTotalPrice = details.reduce((sum, item) => sum + item.price * item.quantity, 0);
 
-    await tx.purchaseOrder.update({
+    await prisma.purchaseOrder.update({
         where: { id: Number(poId) },
         data: { totalPrice: newTotalPrice }
     });
@@ -104,7 +104,7 @@ exports.updatePurchaseOrderDetail = async (req, res) => {
     try {
         const updatedDetail = await prisma.$transaction(async (tx) => {
             // 1. ค้นหา Detail และ PO ที่เกี่ยวข้องเพื่อตรวจสอบสถานะ
-            const detail = await tx.purchaseOrderDetail.findUnique({
+            const detail = await prisma.purchaseOrderDetail.findUnique({
                 where: { id: Number(id) },
                 include: { purchaseOrder: { select: { status: true } } }
             });
@@ -119,7 +119,7 @@ exports.updatePurchaseOrderDetail = async (req, res) => {
             }
 
             // 2. อัปเดต Detail
-            const currentUpdate = await tx.purchaseOrderDetail.update({
+            const currentUpdate = await prisma.purchaseOrderDetail.update({
                 where: { id: Number(id) },
                 data: {
                     quantity: quantity !== undefined ? Number(quantity) : undefined,
@@ -158,7 +158,7 @@ exports.deletePurchaseOrderDetail = async (req, res) => {
     try {
         await prisma.$transaction(async (tx) => {
             // 1. ค้นหา Detail และ PO ที่เกี่ยวข้องเพื่อตรวจสอบสถานะ
-            const detail = await tx.purchaseOrderDetail.findUnique({
+            const detail = await prisma.purchaseOrderDetail.findUnique({
                 where: { id: Number(id) },
                 include: { purchaseOrder: { select: { status: true } } }
             });
@@ -173,7 +173,7 @@ exports.deletePurchaseOrderDetail = async (req, res) => {
             }
 
             // 2. ลบ Detail
-            await tx.purchaseOrderDetail.delete({
+            await prisma.purchaseOrderDetail.delete({
                 where: { id: Number(id) }
             });
 

@@ -230,7 +230,7 @@ exports.checkoutOrder = async (req, res) => {
         await prisma.$transaction(async (tx) => {
             // ✅ เคลียร์สถานะโต๊ะที่ถูกรวม
             if (mergedFromIds.length > 0) {
-                await tx.table.updateMany({
+                await prisma.table.updateMany({
                     where: { id: { in: mergedFromIds } },
                     data: {
                         status: "ວ່າງ",
@@ -241,7 +241,7 @@ exports.checkoutOrder = async (req, res) => {
             }
 
             // ✅ เคลียร์สถานะโต๊ะหลัก
-            await tx.table.update({
+            await prisma.table.update({
                 where: { id: order.tableId },
                 data: {
                     status: "ວ່າງ",
@@ -252,13 +252,13 @@ exports.checkoutOrder = async (req, res) => {
 
             // ✅ ลบ TableGroup ถ้ามี
             if (order.table.groupId) {
-                await tx.tableGroup.delete({
+                await prisma.tableGroup.delete({
                     where: { id: order.table.groupId },
                 });
             }
 
             // ✅ อัปเดตสถานะบิล
-            await tx.order.update({
+            await prisma.order.update({
                 where: { id: order.id },
                 data: {
                     billStatus: 'PAID',
@@ -291,7 +291,7 @@ exports.cancelOrder = async (req, res) => {
         const parsedOrderId = parseInt(orderId, 10);
 
         const cancelledOrder = await prisma.$transaction(async (tx) => {
-            const orderToCancel = await tx.order.findUnique({
+            const orderToCancel = await prisma.order.findUnique({
                 where: { id: parsedOrderId },
                 include: {
                     orderRounds: {
@@ -322,7 +322,7 @@ exports.cancelOrder = async (req, res) => {
 
             if (stockToReturn.size > 0) {
                 const stockUpdates = Array.from(stockToReturn.entries()).map(([drinkId, qty]) =>
-                    tx.drink.update({
+                    prisma.drink.update({
                         where: { id: drinkId },
                         data: { qty: { increment: qty } }
                     })
@@ -330,7 +330,7 @@ exports.cancelOrder = async (req, res) => {
                 await Promise.all(stockUpdates);
             }
 
-            return tx.order.update({
+            return prisma.order.update({
                 where: { id: parsedOrderId },
                 data: { billStatus: BillStatus.CANCELLED },
                 include: FULL_ORDER_INCLUDE
@@ -570,7 +570,7 @@ exports.moveTable = async (req, res) => {
 
         await prisma.$transaction(async (tx) => {
             // ย้าย order ไปยังโต๊ะใหม่
-            await tx.order.update({
+            await prisma.order.update({
                 where: { id: openOrder.id },
                 data: {
                     tableId: toTableId,
@@ -580,7 +580,7 @@ exports.moveTable = async (req, res) => {
             });
 
             // อัปเดตสถานะโต๊ะเก่าให้เป็น "ວ່າງ"
-            await tx.table.update({
+            await prisma.table.update({
                 where: { id: fromTableId },
                 data: {
                     status: "ວ່າງ",
@@ -590,7 +590,7 @@ exports.moveTable = async (req, res) => {
             });
 
             // อัปเดตสถานะโต๊ะใหม่ให้เป็น "ກຳລັງໃຊ້ງານ"
-            await tx.table.update({
+            await prisma.table.update({
                 where: { id: toTableId },
                 data: {
                     status: "ກຳລັງໃຊ້ງານ",

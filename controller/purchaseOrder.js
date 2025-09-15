@@ -26,14 +26,14 @@ exports.createPurchaseOrder = async (req, res) => {
         // --- Transaction ---
         const newPurchaseOrder = await prisma.$transaction(async (tx) => {
             // 1. ตรวจสอบว่า Supplier และ ProductUnit ทั้งหมดมีอยู่จริง
-            const supplier = await tx.supplier.findUnique({ where: { id: Number(supplierId) } });
+            const supplier = await prisma.supplier.findUnique({ where: { id: Number(supplierId) } });
             if (!supplier) {
                 // ใช้ throw error เพื่อให้ transaction rollback อัตโนมัติ
                 throw new Error("Supplier not found.");
             }
 
             const productUnitIds = details.map(d => d.productUnitId);
-            const productUnits = await tx.productUnit.findMany({
+            const productUnits = await prisma.productUnit.findMany({
                 where: { id: { in: productUnitIds } }
             });
 
@@ -45,7 +45,7 @@ exports.createPurchaseOrder = async (req, res) => {
             const totalPrice = details.reduce((sum, item) => sum + item.price * item.quantity, 0);
 
             // 3. สร้าง Purchase Order หลัก
-            const purchaseOrder = await tx.purchaseOrder.create({
+            const purchaseOrder = await prisma.purchaseOrder.create({
                 data: {
                     supplierId: Number(supplierId),
                     totalPrice: totalPrice,
@@ -55,7 +55,7 @@ exports.createPurchaseOrder = async (req, res) => {
 
             // 4. ✨ สร้าง Purchase Order Details โดยอ้างอิง `productUnitId`
             const detailCreations = details.map(detail => {
-                return tx.purchaseOrderDetail.create({
+                return prisma.purchaseOrderDetail.create({
                     data: {
                         poId: purchaseOrder.id,
                         productUnitId: Number(detail.productUnitId),
@@ -68,7 +68,7 @@ exports.createPurchaseOrder = async (req, res) => {
             await Promise.all(detailCreations);
 
             // 5. คืนค่า PO ที่สมบูรณ์พร้อมข้อมูลที่เกี่ยวข้องทั้งหมด
-            return tx.purchaseOrder.findUnique({
+            return prisma.purchaseOrder.findUnique({
                 where: { id: purchaseOrder.id },
                 include: {
                     supplier: true,
@@ -180,7 +180,7 @@ exports.updatePurchaseOrderStatus = async (req, res) => {
 
         const updatedPo = await prisma.$transaction(async (tx) => {
             // 1. ดึงข้อมูล PO และตรวจสอบว่ามีอยู่จริงหรือไม่
-            const purchaseOrder = await tx.purchaseOrder.findUnique({
+            const purchaseOrder = await prisma.purchaseOrder.findUnique({
                 where: { id: Number(id) },
                 // ✨ ดึงข้อมูล `productUnit` มาด้วย เพราะต้องใช้ `baseItemsCount` และ `drinkId`
                 include: {
@@ -214,7 +214,7 @@ exports.updatePurchaseOrderStatus = async (req, res) => {
                     // (จำนวนแพ็กเกจ * จำนวนหน่วยย่อยในแพ็กเกจ)
                     const quantityToAdd = detail.quantity * detail.productUnit.baseItemsCount;
 
-                    return tx.drink.update({
+                    return prisma.drink.update({
                         where: { id: detail.productUnit.drinkId }, // อัปเดต `Drink` ที่ถูกต้อง
                         data: {
                             qty: {
@@ -227,7 +227,7 @@ exports.updatePurchaseOrderStatus = async (req, res) => {
             }
 
             // 4. อัปเดตสถานะของ PO
-            return tx.purchaseOrder.update({
+            return prisma.purchaseOrder.update({
                 where: { id: Number(id) },
                 data: { status: status },
                 include: { // include ข้อมูลทั้งหมดเพื่อส่งกลับไปให้ client

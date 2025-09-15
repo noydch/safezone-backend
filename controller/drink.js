@@ -34,7 +34,7 @@ exports.createDrink = async (req, res) => {
                     const createdData = await prisma.$transaction(async (tx) => {
 
                         // ✨ 1. ดึงข้อมูลหน่วยพื้นฐาน (Base Unit) เพื่อเอาชื่อมาใช้ ✨
-                        const baseUnit = await tx.unit.findUnique({
+                        const baseUnit = await prisma.unit.findUnique({
                             where: { id: parseInt(baseUnitId) },
                         });
 
@@ -44,7 +44,7 @@ exports.createDrink = async (req, res) => {
                         }
 
                         // 2. สร้าง Drink record หลัก
-                        const newDrink = await tx.drink.create({
+                        const newDrink = await prisma.drink.create({
                             data: {
                                 name,
                                 categoryId: categoryId ? parseInt(categoryId) : null,
@@ -55,7 +55,7 @@ exports.createDrink = async (req, res) => {
                         });
 
                         // ✨ 3. สร้าง ProductUnit สำหรับขายเป็น "หน่วยเดี่ยว" โดยใช้ชื่อจาก baseUnit ✨
-                        await tx.productUnit.create({
+                        await prisma.productUnit.create({
                             data: {
                                 name: `${baseUnit.name}`, // <-- ใช้ชื่อจาก baseUnit ที่ดึงมา
                                 price: parseFloat(price),
@@ -65,7 +65,7 @@ exports.createDrink = async (req, res) => {
                         });
 
                         // 4. ดึงข้อมูลทั้งหมดที่สร้างขึ้นเพื่อส่งกลับ
-                        return tx.drink.findUnique({
+                        return prisma.drink.findUnique({
                             where: { id: newDrink.id },
                             include: {
                                 Category: true,

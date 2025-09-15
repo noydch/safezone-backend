@@ -9,7 +9,7 @@ exports.confirmPurchaseOrder = async (req, res) => {
 
             // --- 1. แก้ไข: ดึงข้อมูล PO พร้อมรายละเอียดเชิงลึก ---
             // เราต้อง include ไปถึง productUnit เพื่อเอา drinkId และ baseItemsCount มาใช้
-            const purchaseOrder = await tx.purchaseOrder.findUnique({
+            const purchaseOrder = await prisma.purchaseOrder.findUnique({
                 where: { id: Number(id) },
                 include: {
                     details: {
@@ -38,13 +38,13 @@ exports.confirmPurchaseOrder = async (req, res) => {
             }
 
             // --- 3. อัปเดตสถานะ PO เป็น "approved" ---
-            await tx.purchaseOrder.update({
+            await prisma.purchaseOrder.update({
                 where: { id: Number(id) },
                 data: { status: 'approved' }
             });
 
             // --- 4. สร้างใบรับสินค้า (ImportReceipt) ---
-            const newImportReceipt = await tx.importReceipt.create({
+            const newImportReceipt = await prisma.importReceipt.create({
                 data: {
                     supplierId: purchaseOrder.supplierId,
                     importDate: new Date(),
@@ -66,7 +66,7 @@ exports.confirmPurchaseOrder = async (req, res) => {
                 const quantityInBaseUnits = item.quantity * item.productUnit.baseItemsCount;
 
                 // --- 5.2 แก้ไข: สร้าง ImportDetail โดยใช้ข้อมูลที่ถูกต้อง ---
-                allOperations.push(tx.importDetail.create({
+                allOperations.push(prisma.importDetail.create({
                     data: {
                         importId: newImportReceipt.id,
                         drinkId: item.productUnit.drinkId, // <-- ใช้ drinkId จาก productUnit
@@ -76,7 +76,7 @@ exports.confirmPurchaseOrder = async (req, res) => {
                 }));
 
                 // --- 5.3 แก้ไข: เพิ่มสต็อกในตาราง Drink ด้วย ORM ที่ปลอดภัยกว่า ---
-                allOperations.push(tx.drink.update({
+                allOperations.push(prisma.drink.update({
                     where: { id: item.productUnit.drinkId }, // <-- อ้างอิง drinkId ที่ถูกต้อง
                     data: {
                         qty: {
@@ -90,7 +90,7 @@ exports.confirmPurchaseOrder = async (req, res) => {
             await Promise.all(allOperations);
 
             // 7. คืนค่า ImportReceipt ที่สร้างเสร็จพร้อมรายละเอียดทั้งหมด
-            return tx.importReceipt.findUnique({
+            return prisma.importReceipt.findUnique({
                 where: { id: newImportReceipt.id },
                 include: {
                     details: {
