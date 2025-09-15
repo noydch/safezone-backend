@@ -54,7 +54,7 @@ exports.putCategory = async (req, res) => {
         // console.log(req.body);
         const category = await prisma.category.update({
             where: {
-                cid: Number(req.params.id)
+                id: Number(req.params.id)
             },
             data: {
                 name: name

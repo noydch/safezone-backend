@@ -121,28 +121,32 @@ exports.updateProductUnit = async (req, res) => {
 exports.deleteProductUnit = async (req, res) => {
     try {
         const { id } = req.params;
+        const parsedId = Number(id);
 
-        // ตรวจสอบว่า ProductUnit ID นี้มีอยู่จริง
+        if (isNaN(parsedId)) { // ตรวจสอบว่า ID เป็นตัวเลขหรือไม่
+            return res.status(400).json({ message: "Invalid ID format" });
+        }
+
         const existingProductUnit = await prisma.productUnit.findUnique({
-            where: { id: Number(id) }
+            where: { id: parsedId }
         });
 
         if (!existingProductUnit) {
+            // ใช้ error code P2025 เป็นตัวอย่างสำหรับกรณีไม่พบข้อมูล
+            // แต่เนื่องจากเราเช็คด้วย findUnique ก่อนแล้ว เลยสามารถส่ง message นี้ได้เลย
             return res.status(404).json({ message: "Product Unit not found" });
         }
 
         await prisma.productUnit.delete({
-            where: {
-                id: Number(id),
-            },
+            where: { id: parsedId },
         });
 
         res.json({ message: `Product Unit with ID ${id} deleted successfully` });
     } catch (error) {
-        console.log(error);
-        if (error.code === 'P2003') { // จัดการ error กรณีลบไม่ได้เพราะถูกใช้งานอยู่
-            return res.status(400).json({ message: "Cannot delete this product unit because it is currently in use." });
+        console.error(error); // ใช้ console.error สำหรับ error
+        if (error.code === 'P2003') {
+            return res.status(400).json({ message: "Cannot delete this product unit because it is currently in use by other records." });
         }
-        res.status(500).json({ message: "Server error" });
+        res.status(500).json({ message: "Server error occurred" });
     }
 };

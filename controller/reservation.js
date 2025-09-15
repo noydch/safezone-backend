@@ -54,7 +54,7 @@ exports.createReservation = async (req, res) => {
         if (conflictedReservations.length > 0) {
             const conflictedTableIds = [...new Set(conflictedReservations.map(r => r.tableId))];
             return res.status(409).json({
-                message: `โต๊ะ ${conflictedTableIds.join(', ')} ถูกจองในวันเดียวกันแล้ว`
+                message: `ໂຕະ ${conflictedTableIds.join(', ')} ຖືກຈອງໃນວັນທິ່ເລືອກແລ້ວ ກະລຸນາເລືອກໂຕະໃໝ່`
             });
         }
 
