@@ -8,11 +8,13 @@ require('dotenv').config();
 
 const { readdirSync } = require('fs');
 
+const PORT = process.env.PORT || 5050;
+
 app.use(cors({
     origin: [
         'http://localhost:5173',
-        'http://localhost:5174',
-        'https://mysafezone.netlify.app',
+        // 'http://localhost:5174',
+        // 'https://mysafezone.netlify.app',
         'https://saysamone1.wasmer.app/'
     ],
     credentials: true,
@@ -26,6 +28,11 @@ app.use(express.json({ limit: '30mb' }));
 readdirSync('./routes').map((r) =>
     app.use('/api', require('./routes/' + r))
 );
+
+// Health check for Render
+app.get('/', (req, res) => {
+    res.status(200).json({ status: 'ok' });
+});
 
 // ✅ สร้าง HTTP Server และ Socket.IO
 const server = http.createServer(app);
@@ -48,6 +55,6 @@ io.on('connection', (socket) => {
     });
 });
 
-server.listen(5050, () => {
-    console.log('✅ Server is running on port 5050');
+server.listen(PORT, '0.0.0.0', () => {
+    console.log(`✅ Server is running on port ${PORT}`);
 });
