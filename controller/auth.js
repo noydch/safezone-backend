@@ -7,12 +7,14 @@ const { DateTime } = require('luxon');
 exports.login = async (req, res) => {
     try {
         const { email, password } = req.body
-        // console.log(email, password);
+        const normalizedEmail = (email || '').toLowerCase().trim()
+        const passwordInput = typeof password === 'string' ? password : String(password ?? '')
+        // console.log(normalizedEmail, !!passwordInput);
 
         // Check email
         const employee = await prisma.employee.findFirst({
             where: {
-                email: email
+                email: normalizedEmail
             }
         })
         console.log(employee);
@@ -24,7 +26,8 @@ exports.login = async (req, res) => {
 
 
         // Check password
-        const isMatchPw = await bcrypt.compare(password, employee.password)
+        const isMatchPw = await bcrypt.compare(passwordInput, employee.password)
+        console.log('isMatchPw:', isMatchPw);
         if (!isMatchPw) {
             return res.status(400).json({
                 message: "Password Invalided!!!"
