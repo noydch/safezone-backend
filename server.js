@@ -34,6 +34,14 @@ app.get('/', (req, res) => {
   res.status(200).json({ status: 'ok' });
 });
 
+// 🔎 Global error logging to debug Render crashes
+process.on('unhandledRejection', (err) => {
+  console.error('unhandledRejection:', err);
+});
+process.on('uncaughtException', (err) => {
+  console.error('uncaughtException:', err);
+});
+
 // ✅ ใช้ 0.0.0.0 เพื่อให้ Render เข้าถึงได้
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`✅ Server is running on port ${PORT}`);
