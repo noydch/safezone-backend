@@ -8,7 +8,7 @@ require('dotenv').config();
 
 const { readdirSync } = require('fs');
 
-const PORT = process.env.PORT || 5050;
+const PORT = process.env.PORT || 3000;
 
 app.use(cors({
     origin: [
