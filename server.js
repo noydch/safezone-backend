@@ -13,7 +13,7 @@ app.use(cors({
         'http://localhost:5173',
         'http://localhost:5174',
         'https://mysafezone.netlify.app',
-        'https://mysafezone-mb.netlify.app'
+        'https://saysamone1.wasmer.app/'
     ],
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
