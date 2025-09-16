@@ -1,7 +1,5 @@
 const express = require('express');
 const app = express();
-const http = require('http');
-const { Server } = require('socket.io');
 const cors = require('cors');
 const morgan = require('morgan');
 require('dotenv').config();
@@ -36,28 +34,7 @@ app.get('/', (req, res) => {
   res.status(200).json({ status: 'ok' });
 });
 
-// ✅ สร้าง HTTP Server และ Socket.IO
-const server = http.createServer(app);
-const io = new Server(server, {
-  cors: {
-    origin: '*',
-    methods: ['GET', 'POST']
-  }
-});
-
-// ทำให้ socket ใช้ได้ทุก controller
-global.io = io;
-
-// เริ่มฟัง socket
-io.on('connection', (socket) => {
-  console.log('🔌 New client connected: ' + socket.id);
-
-  socket.on('disconnect', () => {
-    console.log('❌ Client disconnected: ' + socket.id);
-  });
-});
-
 // ✅ ใช้ 0.0.0.0 เพื่อให้ Render เข้าถึงได้
-server.listen(PORT, '0.0.0.0', () => {
+app.listen(PORT, '0.0.0.0', () => {
   console.log(`✅ Server is running on port ${PORT}`);
 });
